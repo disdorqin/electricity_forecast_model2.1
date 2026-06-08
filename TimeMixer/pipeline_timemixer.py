@@ -417,9 +417,18 @@ def predict_timemixer(bundle, past, future, device, batch_size=64):
 
 
 def smape(pred, true):
-    pred = np.asarray(pred, dtype=float)
-    true = np.asarray(true, dtype=float)
-    denom = np.maximum((np.abs(pred) + np.abs(true)) / 2, 50)
+    """按 SMAPE计算.md 文档规则: 先值替换 y<50->50, y_hat<50->50, 再算分母
+
+    文档规则 (SMAPE计算.md):
+      若 y_i < 50, 将 y_i 替换为 50
+      若 y_hat_i < 50, 将 y_hat_i 替换为 50
+      再按 SMAPE = (100/n) * sum |y_hat - y| / ((|y_hat| + |y|)/2) 计算
+    """
+    pred = np.asarray(pred, dtype=float).copy()
+    true = np.asarray(true, dtype=float).copy()
+    pred[pred < 50] = 50
+    true[true < 50] = 50
+    denom = (np.abs(pred) + np.abs(true)) / 2
     return float(np.mean(np.abs(pred - true) / denom) * 100)
 
 
