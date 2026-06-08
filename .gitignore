@@ -28,6 +28,8 @@ checkpoints/
 
 # Temp
 _tmp_*.py
+debug.log
+*.log
 
 # OS/editor
 .DS_Store
