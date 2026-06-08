@@ -1,0 +1,8 @@
+{
+  "mode": "release_bundle",
+  "target": "dayahead",
+  "mod": "all",
+  "asof_hour": 15,
+  "force_policy_recompute": false,
+  "notes": "Use mode=release_bundle for the locked release-safe publication path. Use mode=run/daily_backtest/joint_da_rt for direct package execution."
+}

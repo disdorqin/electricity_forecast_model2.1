@@ -1,0 +1,32 @@
+{
+  "model_name": "RT916_SpikeFusionNet",
+  "description": "Formal release-safe RT916 package with rule-policy day-ahead stage3 routing and locked 2025/2026 validation records.",
+  "release_safe": {
+    "best_policy": "rule_policy",
+    "policy_family_benchmark_winner": "rule_policy",
+    "leakage_fix": "target-derived lag and rolling features are recomputed after asof cutoff during inference",
+    "locked_from_experiment": "E1003",
+    "historical_validation_root": "outputs/RT916_SpikeMarketLab/model_packages/RT916_SpikeFusionNet_2025",
+    "window_2025_release_smape": 25.557408569455166,
+    "window_2026_release_smape": 24.993172955248596,
+    "window_2025_gap_vs_research": 0.17474517044282933,
+    "window_2026_gap_vs_research": 1.4670974954755742
+  },
+  "realtime": {
+    "reference_aggregate_experiment": "E0301",
+    "stage1_experiment": "E0299",
+    "stage2_experiment": "E0297",
+    "stage3_experiment": "E0300"
+  },
+  "dayahead": {
+    "reference_aggregate_experiment": "E0306",
+    "stage1_experiment": "E0318",
+    "stage1_input_variant": "split",
+    "stage1_backbone": "base",
+    "stage2_experiment": "E0308",
+    "stage2_input_variant": "split",
+    "stage3_base_experiment": "E0305",
+    "stage3_release_policy_experiment": "E1003",
+    "stage3_rule_policy": "rolling_12m_train_plus_1m_val_rule_policy"
+  }
+}
