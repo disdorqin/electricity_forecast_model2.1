@@ -52,13 +52,13 @@ def run_ledger_smoke(args: Any) -> dict:
     smoke_args.force = True
     smoke_args.allow_missing_models = False
 
-    # Reduce training params for speed (user can override via CLI)
-    if not _user_overrode(args, "training_months"):
-        smoke_args.training_months = getattr(args, "training_months", 3)
-    if not _user_overrode(args, "timemixer_epochs"):
-        smoke_args.timemixer_epochs = getattr(args, "timemixer_epochs", 3)
-    if not _user_overrode(args, "timemixer_patience"):
-        smoke_args.timemixer_patience = getattr(args, "timemixer_patience", 1)
+    # Reduce training params for speed — use smoke-specific values
+    smoke_args.training_months = int(getattr(args, "smoke_training_months", 3) or 3)
+    smoke_args.timemixer_epochs = int(getattr(args, "smoke_timemixer_epochs", 3) or 3)
+    smoke_args.timemixer_patience = int(getattr(args, "smoke_timemixer_patience", 1) or 1)
+    smoke_args.timemixer_batch_size = int(getattr(args, "timemixer_batch_size", 16) or 16)
+    smoke_args.max_cpu_workers = int(getattr(args, "max_cpu_workers", 2) or 2)
+    smoke_args.max_gpu_workers = 1  # Always serial GPU for smoke
 
     logger.info(
         f"Smoke config: training_months={smoke_args.training_months}, "
@@ -136,14 +136,3 @@ def _run_smoke_checks(predict_result: dict, target_date: str, report: dict):
     report["checks"] = checks
     report["smoke_status"] = "PASS" if all_ok else "FAIL"
 
-
-def _user_overrode(args: Any, param_name: str) -> bool:
-    """Check if user explicitly set a CLI param (heuristic)."""
-    # argparse stores defaults; we check if the value differs from our smoke default
-    smoke_defaults = {
-        "training_months": 3,
-        "timemixer_epochs": 3,
-        "timemixer_patience": 1,
-    }
-    actual = getattr(args, param_name, None)
-    return actual is not None and actual != smoke_defaults.get(param_name)

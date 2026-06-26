@@ -81,4 +81,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--timemixer-batch-size", type=int, default=16, help="TimeMixer batch size (default: 16)")
     parser.add_argument("--timemixer-full-refit", action="store_true", default=True, help="Enable TimeMixer full refit on train+valid after early stopping (default: enabled)")
     parser.add_argument("--timemixer-seeds", type=int, default=42, help="TimeMixer random seed (default: 42)")
+    # Smoke pipeline params
+    parser.add_argument("--smoke-training-months", type=int, default=3, help="Training months for ledger_smoke (default: 3)")
+    parser.add_argument("--smoke-timemixer-epochs", type=int, default=3, help="TimeMixer epochs for ledger_smoke (default: 3)")
+    parser.add_argument("--smoke-timemixer-patience", type=int, default=1, help="TimeMixer patience for ledger_smoke (default: 1)")
     return parser
