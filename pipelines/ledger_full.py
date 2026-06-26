@@ -1,0 +1,283 @@
+"""
+Ledger full pipeline.
+
+Orchestrates the complete production chain for a single target day D:
+
+  1. ledger_predict   → run all models, append to prediction ledger
+  2. ledger_weight    → learn fusion weights from D-30~D-1 ledger
+  3. ledger_fuse      → apply weights to produce fused predictions
+  4. ledger_classifier → run negative price classifier (realtime)
+  5. final outputs    → aggregate dayahead + realtime final files
+
+This is the production-grade replacement for the old staged `full` pipeline.
+No validation tap, no rolling OOF, no online validation.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import shutil
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+import pandas as pd
+
+logger = logging.getLogger(__name__)
+
+
+def run_ledger_full(args: Any) -> dict:
+    """
+    Main entry for --pipeline ledger_full.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Must contain: date, data_path, epf_v1_root (optional),
+        ledger_root, runs_root, max_cpu_workers, max_gpu_workers,
+        allow_missing_models, force, strict_classifier.
+
+    Returns
+    -------
+    dict with full pipeline manifest.
+    """
+    target_date = args.date
+    if not target_date:
+        raise ValueError("--date is required for ledger_full")
+
+    logger.info(f"=== ledger_full: {target_date} ===")
+
+    runs_root = Path(getattr(args, "runs_root", "outputs/runs"))
+
+    manifest = {
+        "pipeline": "ledger_full",
+        "target_date": target_date,
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "status": "running",
+        "stages": {},
+        "warnings": [],
+        "errors": [],
+    }
+
+    failed_early = False
+
+    # -----------------------------------------------------------------------
+    # Stage 1: ledger_predict
+    # -----------------------------------------------------------------------
+    logger.info(f"\n{'='*60}\nStage 1/5: ledger_predict\n{'='*60}")
+    try:
+        from pipelines.ledger_predict import run_ledger_predict
+        predict_result = run_ledger_predict(args)
+        manifest["stages"]["ledger_predict"] = predict_result
+
+        if predict_result.get("status") == "failed":
+            manifest["status"] = "failed"
+            manifest["errors"].append("ledger_predict failed")
+            failed_early = True
+    except Exception as e:
+        manifest["stages"]["ledger_predict"] = {"status": "error", "error": str(e)}
+        manifest["errors"].append(f"ledger_predict: {e}")
+        manifest["status"] = "failed"
+        failed_early = True
+
+    if failed_early:
+        _write_manifest(runs_root, target_date, manifest)
+        return manifest
+
+    # -----------------------------------------------------------------------
+    # Stage 2: ledger_weight
+    # -----------------------------------------------------------------------
+    logger.info(f"\n{'='*60}\nStage 2/5: ledger_weight\n{'='*60}")
+    try:
+        from pipelines.ledger_weight import run_ledger_weight
+        weight_result = run_ledger_weight(args)
+        manifest["stages"]["ledger_weight"] = weight_result
+
+        if weight_result.get("status") == "failed":
+            manifest["status"] = "failed"
+            manifest["errors"].append("ledger_weight failed")
+            failed_early = True
+    except Exception as e:
+        manifest["stages"]["ledger_weight"] = {"status": "error", "error": str(e)}
+        manifest["errors"].append(f"ledger_weight: {e}")
+        manifest["status"] = "failed"
+        failed_early = True
+
+    if failed_early:
+        _write_manifest(runs_root, target_date, manifest)
+        return manifest
+
+    # -----------------------------------------------------------------------
+    # Stage 3: ledger_fuse
+    # -----------------------------------------------------------------------
+    logger.info(f"\n{'='*60}\nStage 3/5: ledger_fuse\n{'='*60}")
+    try:
+        from pipelines.ledger_fuse import run_ledger_fuse
+        fuse_result = run_ledger_fuse(args)
+        manifest["stages"]["ledger_fuse"] = fuse_result
+
+        if fuse_result.get("status") == "failed":
+            manifest["status"] = "failed"
+            manifest["errors"].append("ledger_fuse failed")
+            failed_early = True
+    except Exception as e:
+        manifest["stages"]["ledger_fuse"] = {"status": "error", "error": str(e)}
+        manifest["errors"].append(f"ledger_fuse: {e}")
+        manifest["status"] = "failed"
+        failed_early = True
+
+    if failed_early:
+        _write_manifest(runs_root, target_date, manifest)
+        return manifest
+
+    # -----------------------------------------------------------------------
+    # Stage 4: ledger_classifier
+    # -----------------------------------------------------------------------
+    logger.info(f"\n{'='*60}\nStage 4/5: ledger_classifier\n{'='*60}")
+    try:
+        from pipelines.ledger_classifier import run_ledger_classifier
+        clf_result = run_ledger_classifier(args)
+        manifest["stages"]["ledger_classifier"] = clf_result
+    except Exception as e:
+        manifest["stages"]["ledger_classifier"] = {"status": "error", "error": str(e)}
+        manifest["warnings"].append(f"ledger_classifier: {e}")
+
+    # -----------------------------------------------------------------------
+    # Stage 5: Final outputs
+    # -----------------------------------------------------------------------
+    logger.info(f"\n{'='*60}\nStage 5/5: Final outputs\n{'='*60}")
+    try:
+        final_result = _collect_final_outputs(runs_root, target_date)
+        manifest["stages"]["final_outputs"] = final_result
+    except Exception as e:
+        manifest["stages"]["final_outputs"] = {"status": "error", "error": str(e)}
+        manifest["warnings"].append(f"final_outputs: {e}")
+
+    # -----------------------------------------------------------------------
+    # Determine final status
+    # -----------------------------------------------------------------------
+    manifest["completed_at"] = datetime.now(timezone.utc).isoformat()
+
+    errors = manifest.get("errors", [])
+    warnings = manifest.get("warnings", [])
+
+    if errors:
+        manifest["status"] = "failed"
+    elif warnings:
+        manifest["status"] = "complete_with_warnings"
+    else:
+        manifest["status"] = "complete"
+
+    _write_manifest(runs_root, target_date, manifest)
+
+    logger.info(f"ledger_full {target_date}: {manifest['status']}")
+
+    return manifest
+
+
+def _collect_final_outputs(runs_root: Path, target_date: str) -> dict:
+    """Collect and copy final outputs to the top-level final directory."""
+    result = {"status": "running"}
+
+    run_dir = runs_root / target_date
+    final_dir = run_dir / "final"
+    final_dir.mkdir(parents=True, exist_ok=True)
+
+    # Dayahead final
+    da_final = run_dir / "dayahead" / "fuse" / "fused_predictions.csv"
+    if da_final.exists():
+        shutil.copy2(da_final, final_dir / "dayahead_final_predictions.csv")
+        da_df = pd.read_csv(da_final)
+        result["dayahead_final_rows"] = len(da_df)
+        _validate_final(da_df, "dayahead", target_date, result)
+
+    # Realtime final (uncorrected)
+    rt_final = run_dir / "realtime" / "final" / "realtime_final_predictions.csv"
+    if rt_final.exists():
+        shutil.copy2(rt_final, final_dir / "realtime_final_predictions.csv")
+        rt_df = pd.read_csv(rt_final)
+        result["realtime_final_rows"] = len(rt_df)
+        _validate_final(rt_df, "realtime", target_date, result)
+
+    # Realtime final (corrected)
+    rt_corrected = run_dir / "realtime" / "final" / "realtime_final_predictions_corrected.csv"
+    if rt_corrected.exists():
+        shutil.copy2(rt_corrected, final_dir / "realtime_final_predictions_corrected.csv")
+        rt_c_df = pd.read_csv(rt_corrected)
+        result["realtime_corrected_rows"] = len(rt_c_df)
+
+    # Submission ready
+    _build_submission_ready(final_dir, target_date, result)
+
+    result["status"] = "complete"
+    return result
+
+
+def _validate_final(df: pd.DataFrame, task: str, target_date: str, result: dict):
+    """Validate final output: 24 rows, hours 1..24, no duplicates."""
+    n = len(df)
+    if n != 24:
+        result.setdefault("warnings", []).append(
+            f"{task} final: expected 24 rows, got {n}"
+        )
+
+    if "hour_business" in df.columns:
+        hours = sorted(df["hour_business"].unique())
+        if hours != list(range(1, 25)):
+            result.setdefault("warnings", []).append(
+                f"{task} final: hours {hours[0]}..{hours[-1]}, "
+                f"expected 1..24"
+            )
+
+        if df["hour_business"].duplicated().any():
+            result.setdefault("warnings", []).append(
+                f"{task} final: duplicate hours detected"
+            )
+
+
+def _build_submission_ready(final_dir: Path, target_date: str, result: dict):
+    """Build a consolidated submission_ready.csv with dayahead + realtime."""
+    da_path = final_dir / "dayahead_final_predictions.csv"
+    rt_path = final_dir / "realtime_final_predictions_corrected.csv"
+
+    # Prefer corrected realtime, fall back to uncorrected
+    if not rt_path.exists():
+        rt_path = final_dir / "realtime_final_predictions.csv"
+
+    pieces = []
+    if da_path.exists():
+        da_df = pd.read_csv(da_path)
+        da_df = da_df.rename(columns={"y_fused": "dayahead_price"})
+        # Keep minimal columns
+        keep = [c for c in ["business_day", "ds", "hour_business", "period", "dayahead_price"] if c in da_df.columns]
+        pieces.append(da_df[keep])
+
+    if rt_path.exists():
+        rt_df = pd.read_csv(rt_path)
+        # Check for corrected column name
+        price_col = "y_fused_corrected" if "y_fused_corrected" in rt_df.columns else "y_fused"
+        rt_df = rt_df.rename(columns={price_col: "realtime_price"})
+        keep = [c for c in ["business_day", "ds", "hour_business", "period", "realtime_price"] if c in rt_df.columns]
+        pieces.append(rt_df[keep])
+
+    if pieces:
+        submission = pieces[0]
+        for other in pieces[1:]:
+            merge_on = [c for c in ["business_day", "hour_business"] if c in submission.columns and c in other.columns]
+            if merge_on:
+                submission = submission.merge(other, on=merge_on, how="outer")
+            else:
+                submission = pd.concat([submission, other], axis=1)
+
+        submission.to_csv(final_dir / "submission_ready.csv", index=False)
+        result["submission_ready_rows"] = len(submission)
+        logger.info(f"submission_ready.csv: {len(submission)} rows")
+
+
+def _write_manifest(runs_root: Path, target_date: str, manifest: dict):
+    """Write the final manifest."""
+    manifest_path = runs_root / target_date / "run_manifest.json"
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(manifest_path, "w", encoding="utf-8") as f:
+        json.dump(manifest, f, indent=2, ensure_ascii=False, default=str)

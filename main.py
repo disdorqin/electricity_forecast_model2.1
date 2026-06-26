@@ -22,6 +22,14 @@ from pipelines.staged_pipeline import (
 )
 from pipelines.train_pipeline import run_train_pipeline
 
+# New ledger production pipelines
+from pipelines.ledger_predict import run_ledger_predict
+from pipelines.ledger_backfill import run_ledger_backfill
+from pipelines.ledger_weight import run_ledger_weight
+from pipelines.ledger_fuse import run_ledger_fuse
+from pipelines.ledger_classifier import run_ledger_classifier
+from pipelines.ledger_full import run_ledger_full
+
 
 def main() -> int:
     args = build_parser().parse_args()
@@ -74,6 +82,31 @@ def main() -> int:
     if args.pipeline == "full":
         result = run_full_pipeline(args)
         print(f"Full pipeline complete: {result['classifier_stage']}")
+        return 0
+    # --- New ledger production pipelines ---
+    if args.pipeline == "ledger_predict":
+        result = run_ledger_predict(args)
+        print(f"ledger_predict complete: {result}")
+        return 0
+    if args.pipeline == "ledger_backfill":
+        result = run_ledger_backfill(args)
+        print(f"ledger_backfill complete: {result}")
+        return 0
+    if args.pipeline == "ledger_weight":
+        result = run_ledger_weight(args)
+        print(f"ledger_weight complete: {result}")
+        return 0
+    if args.pipeline == "ledger_fuse":
+        result = run_ledger_fuse(args)
+        print(f"ledger_fuse complete: {result}")
+        return 0
+    if args.pipeline == "ledger_classifier":
+        result = run_ledger_classifier(args)
+        print(f"ledger_classifier complete: {result}")
+        return 0
+    if args.pipeline == "ledger_full":
+        result = run_ledger_full(args)
+        print(f"ledger_full complete: {result}")
         return 0
     return 0
 

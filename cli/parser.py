@@ -23,6 +23,13 @@ def build_parser() -> argparse.ArgumentParser:
             "fuse_stage",
             "classifier_stage",
             "full",
+            # New ledger production pipeline
+            "ledger_predict",
+            "ledger_backfill",
+            "ledger_weight",
+            "ledger_fuse",
+            "ledger_classifier",
+            "ledger_full",
         ],
     )
     parser.add_argument("--target", default="both", choices=["dayahead", "realtime", "both"])
@@ -52,4 +59,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--clf-data", default=None)
     parser.add_argument("--daily-run-root", default="daily_runs")
     parser.add_argument("--validation-days", type=int, default=30, help="Number of days for the validation window (default: 30). Used by model_stage for weight fitting.")
+    # Ledger pipeline parameters
+    parser.add_argument("--epf-v1-root", default=None, help="Path to EPF v1.0 repository root (required for LightGBM/TimesFM v1 adapters)")
+    parser.add_argument("--allow-missing-models", action="store_true", default=False, help="Allow ledger pipeline to continue even if some models fail")
+    parser.add_argument("--strict-classifier", action="store_true", default=False, help="Fail ledger_full if classifier fails")
+    parser.add_argument("--force", action="store_true", default=False, help="Force retrain even if checkpoint exists")
+    parser.add_argument("--ledger-root", default="outputs/ledger", help="Root directory for ledger files")
+    parser.add_argument("--runs-root", default="outputs/runs", help="Root directory for daily run outputs")
     return parser
