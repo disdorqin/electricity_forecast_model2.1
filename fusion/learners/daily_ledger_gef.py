@@ -38,10 +38,14 @@ logger = logging.getLogger(__name__)
 
 def smape_floor50(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     """
-    Symmetric MAPE with floor-50 normalization.
+    SMAPE-floor50 (correct formula per docs/metrics_calculation.md).
 
-    floor = max(|y_true| + |y_pred|, 50)
-    SMAPE = mean(|y_true - y_pred| / (floor / 2)) * 100
+    Clips individual y_true and y_pred to floor=50 BEFORE computing SMAPE.
+    This is the authoritative formula for 2.1.
+
+    y_clip  = max(y_true, 50)
+    pred_clip = max(y_pred, 50)
+    SMAPE = mean(|pred_clip - y_clip| / ((|pred_clip| + |y_clip|) / 2)) * 100
     """
     yt = np.asarray(y_true, dtype=np.float64)
     yp = np.asarray(y_pred, dtype=np.float64)
@@ -51,14 +55,22 @@ def smape_floor50(y_true: np.ndarray, y_pred: np.ndarray) -> float:
 
     yt = yt[mask]
     yp = yp[mask]
-    denom = np.maximum(np.abs(yt) + np.abs(yp), 50.0)
-    smape = np.mean(np.abs(yt - yp) / (denom / 2.0)) * 100.0
+
+    # Clip each value to floor=50 (per docs: clip per value, not per pair sum)
+    yt_clip = np.maximum(yt, 50.0)
+    yp_clip = np.maximum(yp, 50.0)
+
+    denom = (np.abs(yp_clip) + np.abs(yt_clip)) / 2.0
+    smape = np.mean(np.abs(yp_clip - yt_clip) / denom) * 100.0
     return float(smape)
 
 
-def mae_normalized(y_true: np.ndarray, y_pred: np.ndarray) -> float:
+def mae_percent(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     """
-    Normalized MAE: MAE / mean(|y_true|), clipped to avoid div by zero.
+    MAE as percentage: 100 * MAE / max(median(|y_true_clip|), 50).
+
+    Designed to be on the same 0-100 scale as SMAPE-floor50
+    for composite loss blending.
     """
     yt = np.asarray(y_true, dtype=np.float64)
     yp = np.asarray(y_pred, dtype=np.float64)
@@ -68,11 +80,10 @@ def mae_normalized(y_true: np.ndarray, y_pred: np.ndarray) -> float:
 
     yt = yt[mask]
     yp = yp[mask]
+
     mae = np.mean(np.abs(yt - yp))
-    mean_true = np.mean(np.abs(yt))
-    if mean_true < 1e-6:
-        return mae  # raw MAE if true values near zero
-    return float(mae / mean_true)
+    denominator = max(np.median(np.abs(np.maximum(yt, 50.0))), 50.0)
+    return float(100.0 * mae / denominator)
 
 
 def compute_daily_loss(
@@ -86,9 +97,10 @@ def compute_daily_loss(
     Parameters
     ----------
     y_true, y_pred : array-like
-        True and predicted values for the 8 hours in this period.
+        True and predicted values for the hours in this period.
     loss_type : str
-        "smape" or "composite" (0.7*smape + 0.3*mae_norm).
+        "smape" or "composite" (0.7*smape_floor50 + 0.3*mae_percent).
+        Both on 0-100 scale.
 
     Returns
     -------
@@ -98,11 +110,12 @@ def compute_daily_loss(
         return smape_floor50(y_true, y_pred)
     else:
         s = smape_floor50(y_true, y_pred)
-        m = mae_normalized(y_true, y_pred)
+        m = mae_percent(y_true, y_pred)
         if np.isnan(s):
             return m
         if np.isnan(m):
             return s
+        # Both on 0-100 scale, so balanced blending
         return 0.7 * s + 0.3 * m
 
 
@@ -387,7 +400,7 @@ class DailyLedgerGEF:
         self,
         training_table: pd.DataFrame,
     ) -> pd.DataFrame:
-        """Generate coverage report per model per day."""
+        """Generate coverage report per model per day. expected=24 rows."""
         if training_table.empty:
             return pd.DataFrame()
 
@@ -395,12 +408,17 @@ class DailyLedgerGEF:
             training_table
             .groupby(["task", "target_day", "model_name"])
             .size()
-            .reset_index(name="n_predictions")
+            .reset_index(name="n_pred")
         )
-        coverage["n_expected"] = 8  # 8 hours per period × 3 periods = 24
+        coverage["n_expected"] = 24  # 24 hours per day, not 8
         coverage["coverage_pct"] = (
-            coverage["n_predictions"] / coverage["n_expected"] * 100
+            coverage["n_pred"] / coverage["n_expected"] * 100
         ).round(1)
+
+        # Status: ok if n_pred == 24, else incomplete
+        coverage["status"] = coverage["n_pred"].apply(
+            lambda x: "ok" if x == 24 else "incomplete"
+        )
 
         return coverage
 
@@ -410,15 +428,25 @@ class DailyLedgerGEF:
         for (task, model), grp in training_table.groupby(["task", "model_name"]):
             if len(grp) == 0:
                 continue
-            loss = compute_daily_loss(
-                grp["y_true"].values,
-                grp["y_pred"].values,
-                self.config.loss_type,
-            )
+            smape = smape_floor50(grp["y_true"].values, grp["y_pred"].values)
+            mp = mae_percent(grp["y_true"].values, grp["y_pred"].values)
+            mae_raw = float(np.mean(np.abs(grp["y_true"].values - grp["y_pred"].values)))
+
+            learner_loss = np.nan
+            if not np.isnan(smape) and not np.isnan(mp):
+                learner_loss = round(0.7 * smape + 0.3 * mp, 4)
+            elif not np.isnan(smape):
+                learner_loss = round(smape, 4)
+            elif not np.isnan(mp):
+                learner_loss = round(mp, 4)
+
             rows.append({
                 "task": task,
                 "model_name": model,
                 "n_samples": len(grp),
-                "loss": round(loss, 4) if not np.isnan(loss) else None,
+                "learner_loss": learner_loss,
+                "smape_floor50": round(smape, 4) if not np.isnan(smape) else None,
+                "mae": round(mae_raw, 4),
+                "mae_percent": round(mp, 4) if not np.isnan(mp) else None,
             })
         return pd.DataFrame(rows)

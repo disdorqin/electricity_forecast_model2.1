@@ -28,10 +28,15 @@ logger = logging.getLogger(__name__)
 
 
 class LightGBMV1Adapter:
-    """Adapter for EPF v1.0 LightGBM predictions."""
+    """Adapter for EPF v1.0 LightGBM predictions.
 
-    def __init__(self, epf_root: str):
+    Mode "exact": faithful v1 behavior, no modifications.
+    Mode "cutoff_safe": truncates data to enforce cutoff safety.
+    """
+
+    def __init__(self, epf_root: str, mode: str = "exact"):
         self.epf_root = Path(epf_root)
+        self.mode = mode
         if not self.epf_root.exists():
             raise FileNotFoundError(
                 f"EPF v1 root not found: {self.epf_root}. "

@@ -3,10 +3,13 @@ Prediction ledger & actual ledger management.
 
 Core abstraction: a cross-date accumulation of model predictions
 and actual prices, keyed by (task, model_name, forecast_date,
-target_day, hour_business).
+target_day, business_day, hour_business).
 
 The prediction ledger is the single source of truth for the
 30-day rolling window used by the daily weight learner.
+
+KEY RULE: hour 24 = D+1 00:00, so business_day + hour_business
+is the canonical key, NOT target_day + hour_business alone.
 
 No validation tap / rolling OOF / online validation here.
 Just honest predictions + actuals accumulated day by day.
@@ -22,6 +25,8 @@ from typing import Optional
 
 import pandas as pd
 
+import numpy as np
+
 from utils.business_day import (
     PREDICTION_LEDGER_COLUMNS,
     ACTUAL_LEDGER_COLUMNS,
@@ -34,8 +39,9 @@ from utils.business_day import (
 logger = logging.getLogger(__name__)
 
 # Unique key columns for dedup
-PREDICTION_UNIQUE_KEY = ["task", "model_name", "forecast_date", "target_day", "hour_business"]
-ACTUAL_UNIQUE_KEY = ["task", "target_day", "hour_business"]
+# Must include business_day because hour 24 = D+1 00:00
+PREDICTION_UNIQUE_KEY = ["task", "model_name", "forecast_date", "target_day", "business_day", "hour_business"]
+ACTUAL_UNIQUE_KEY = ["task", "target_day", "business_day", "hour_business"]
 
 
 # ===========================================================================
@@ -313,6 +319,8 @@ def build_ledger_training_table(
     window_days: int = 30,
     day_gate_recent: float = 0.7,
     day_gate_oldest: float = 0.3,
+    recent_week_boost: bool = True,
+    recent_week_max_gate: float = 0.85,
 ) -> pd.DataFrame:
     """
     Build the training table for weight learning on target_day.
@@ -331,9 +339,13 @@ def build_ledger_training_table(
     window_days : int
         Number of days in the lookback window (default 30).
     day_gate_recent : float
-        Weight for the most recent day (D-1).
+        Base weight for the most recent day (D-1).
     day_gate_oldest : float
-        Weight for the oldest day (D-30).
+        Base weight for the oldest day (D-30).
+    recent_week_boost : bool
+        Enable smooth recent-week boost on top of linear day_gate.
+    recent_week_max_gate : float
+        Max day_gate with boost enabled (default 0.85).
 
     Returns
     -------
@@ -358,13 +370,13 @@ def build_ledger_training_table(
     if "target_day" in act.columns:
         act = act[act["target_day"].isin(window_days_list)]
 
-    # Merge predictions with actuals
-    merge_keys = ["task", "target_day", "hour_business"]
+    # Merge predictions with actuals — use business_day + hour_business
+    merge_keys = ["task", "business_day", "hour_business"]
     merge_keys = [k for k in merge_keys if k in pred.columns and k in act.columns]
 
     if not merge_keys:
-        # Fallback: try business_day + hour_business
-        merge_keys = ["task", "business_day", "hour_business"]
+        # Fallback: try target_day + hour_business
+        merge_keys = ["task", "target_day", "hour_business"]
         merge_keys = [k for k in merge_keys if k in pred.columns and k in act.columns]
 
     # Keep only needed columns from actual
@@ -384,10 +396,15 @@ def build_ledger_training_table(
         training["age_days"] = 0
 
     # Compute day_gate: linear decay from day_gate_recent to day_gate_oldest
-    # day_gate = day_gate_recent - (age_days - 1) * (day_gate_recent - day_gate_oldest) / (window_days - 1)
     decay_rate = (day_gate_recent - day_gate_oldest) / (window_days - 1)
     training["day_gate"] = day_gate_recent - (training["age_days"] - 1) * decay_rate
-    training["day_gate"] = training["day_gate"].clip(day_gate_oldest, day_gate_recent)
+
+    # Recent week boost: smooth enhancement for D-1 through D-7
+    if recent_week_boost:
+        age = training["age_days"].values.astype(float)
+        weekly_boost = 0.15 * np.maximum(0, (8.0 - age) / 7.0)
+        training["day_gate"] = training["day_gate"] + weekly_boost
+        training["day_gate"] = training["day_gate"].clip(day_gate_oldest, recent_week_max_gate)
 
     # Select and order columns
     out_cols = [c for c in TRAINING_TABLE_COLUMNS if c in training.columns]
@@ -416,6 +433,7 @@ def check_ledger_coverage(
     Check coverage of prediction + actual ledger for a set of window days.
 
     Returns a DataFrame with per-day, per-model coverage stats.
+    expected = 24 rows per model per day.
     """
     records = []
     for day in window_days:
@@ -431,17 +449,22 @@ def check_ledger_coverage(
         for model in expected_models:
             model_pred = pred_day[pred_day["model_name"] == model]
             n_pred = len(model_pred)
-            n_expected = 24
-            has_actual = len(act_day) >= 24
+            n_expected = 24  # 24 hours per model per day
+            n_actual = len(act_day)  # actual rows for this day
+
+            coverage_pct = round(n_pred / n_expected * 100, 1) if n_expected > 0 else 0
+            has_actual = n_actual >= 24
+            status = "ok" if n_pred == n_expected and has_actual else "incomplete"
 
             records.append({
                 "target_day": day,
                 "task": task,
                 "model_name": model,
-                "n_predictions": n_pred,
+                "n_pred": n_pred,
+                "n_actual": n_actual,
                 "n_expected": n_expected,
-                "coverage_pct": round(n_pred / n_expected * 100, 1) if n_expected > 0 else 0,
-                "has_actual": has_actual,
+                "coverage_pct": coverage_pct,
+                "status": status,
             })
 
     return pd.DataFrame(records)

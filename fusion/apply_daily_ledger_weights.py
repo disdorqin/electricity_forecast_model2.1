@@ -28,36 +28,31 @@ def apply_daily_ledger_weights(
     weights: pd.DataFrame,
     target_day: str,
     task: str,
+    allow_equal_weight_fallback: bool = False,
+    strict: bool = True,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
     Apply learned weights to predictions for a single day.
+    Strict mode: fail on missing hours, missing models, or missing weights.
 
     Parameters
     ----------
     predictions_long : pd.DataFrame
-        All model predictions in long format. Must contain:
-        task, model_name, target_day, business_day, ds, hour_business,
-        period, y_pred.
-
+        All model predictions in long format.
     weights : pd.DataFrame
-        Per-(task, period) weights. Columns: task, period, model_name, weight.
-
+        Per-(task, period) weights.
     target_day : str
         The target business day (YYYY-MM-DD).
-
     task : str
         "dayahead" or "realtime".
+    allow_equal_weight_fallback : bool
+        If True, use equal weights when period weights are missing.
+    strict : bool
+        If True (default), fail on missing hours/models/weights.
 
     Returns
     -------
-    fused_df : pd.DataFrame
-        Fused predictions with columns: task, business_day, ds,
-        hour_business, period, y_fused.
-
-    debug_df : pd.DataFrame
-        Debug info with columns: task, business_day, hour_business, period,
-        available_models, missing_models, raw_weights, renormalized_weights,
-        renormalized, y_fused.
+    fused_df, debug_df
     """
     # Filter predictions to target_day and task
     pred = predictions_long.copy()
@@ -83,7 +78,10 @@ def apply_daily_ledger_weights(
         hour_pred = pred[pred["hour_business"] == hour]
 
         if hour_pred.empty:
-            logger.warning(f"No predictions for hour {hour}")
+            msg = f"No predictions for hour {hour} in {task}/{target_day}"
+            if strict:
+                raise ValueError(msg)
+            logger.warning(msg)
             continue
 
         period = hour_pred["period"].iloc[0]
@@ -94,11 +92,21 @@ def apply_daily_ledger_weights(
         period_weights = wdf[wdf["period"] == period]
 
         if period_weights.empty:
-            logger.warning(f"No weights for {task}/{period}, using equal weights")
-            # Equal weights fallback
-            available_models = sorted(hour_pred["model_name"].unique())
-            eq_weight = 1.0 / len(available_models)
-            weights_dict = {m: eq_weight for m in available_models}
+            if allow_equal_weight_fallback:
+                logger.warning(f"No weights for {task}/{period}, using equal weights")
+                available_models_fb = sorted(hour_pred["model_name"].unique())
+                eq_weight = 1.0 / max(len(available_models_fb), 1)
+                weights_dict = {m: eq_weight for m in available_models_fb}
+            elif strict:
+                raise ValueError(
+                    f"No weights for {task}/{period}. "
+                    f"Pass --allow-equal-weight-fallback to use equal weights."
+                )
+            else:
+                logger.warning(f"No weights for {task}/{period}, using equal weights")
+                available_models_fb = sorted(hour_pred["model_name"].unique())
+                eq_weight = 1.0 / max(len(available_models_fb), 1)
+                weights_dict = {m: eq_weight for m in available_models_fb}
         else:
             weights_dict = dict(zip(period_weights["model_name"], period_weights["weight"]))
 
@@ -115,7 +123,10 @@ def apply_daily_ledger_weights(
         missing = sorted(all_model_set - set(available))
 
         if not available:
-            logger.warning(f"No available models for hour {hour}")
+            msg = f"No available models for {task} hour {hour}"
+            if strict:
+                raise ValueError(msg)
+            logger.warning(msg)
             continue
 
         # Collect raw weights for available models
@@ -124,7 +135,6 @@ def apply_daily_ledger_weights(
         # Renormalize
         total_raw = sum(raw_w.values())
         if total_raw <= 0:
-            # Equal weights as fallback
             renorm_w = {m: 1.0 / len(available) for m in available}
             was_renormalized = True
         else:
@@ -159,14 +169,18 @@ def apply_daily_ledger_weights(
     fused_df = pd.DataFrame(fused_rows)
     debug_df = pd.DataFrame(debug_rows)
 
-    # Verify 24 rows
+    # Verify 24 rows — STRICT
     if len(fused_df) != 24:
-        logger.warning(
-            f"Fused {task}: expected 24 rows, got {len(fused_df)}"
-        )
+        msg = f"Fused {task}: expected 24 rows, got {len(fused_df)}. Missing hours!"
+        if strict:
+            raise ValueError(msg)
+        logger.warning(msg)
 
     # Check no fillna(0)
     if (fused_df["y_fused"] == 0).any():
-        logger.warning("Fused predictions contain zeros — possible fillna(0) issue")
+        msg = "Fused predictions contain zeros — possible fillna(0) issue"
+        if strict:
+            raise ValueError(msg)
+        logger.warning(msg)
 
     return fused_df, debug_df

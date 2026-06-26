@@ -1,304 +1,199 @@
-# electricity_forecast_model2.0
+# electricity_forecast_model2.1
 
-本仓库聚合了多个电力负荷/电价时序预测模型的实现。包含四块内容:
+> **30-Day Prediction Ledger + Dynamic Fusion Weights Production Pipeline**
 
-- [`RT916_SpikeFusionNet/`](./RT916_SpikeFusionNet/) — RT916 脉冲融合网络(年度切片 + 双通道脉冲残差 + 域自适应)
-- [`SGDFNet/`](./SGDFNet/) — SGDFNet(分段门控 + 误差/方向门控融合 + 区间与概率校准)
-- [`TimeMixer/`](./TimeMixer/) — TimeMixer 日前/实时电价预测 pipeline(PyTorch 单文件实现,合作者 [Jonathan-ysy](https://github.com/Jonathan-ysy) 贡献,commit `e76bd45`)
-- [`TimesFM/`](./TimesFM/) — TimesFM 时间序列基础模型(本地可编辑安装,依赖 `epf` 项目下的 `TF` 包)
+本仓库在 2.0 基础上新增 **ledger 生产链路**：每天只做真实预测，连续积累 30 天预测账本（prediction ledger）和实际值账本（actual ledger），从第 31 天开始用前 30 天真实预测+实际值学习动态融合权重（Daily Ledger GEF），再融合当天预测并进入负电价分类器。
 
-> 四个模型独立运行、互相独立,共享相同的输入字段约定(参见 [`docs/metrics_calculation.md`](./docs/metrics_calculation.md))。
+**旧 2.0 staged pipeline（model_stage / learner_stage / fuse_stage / classifier_stage / full）完整保留为 baseline。**
 
-## 目录结构
+---
 
-```
-.
-├── README.md                ← 本文件
-├── main.py                  ← 统一入口（四阶段链路 + 单阶段运行）
-├── cli/                     ← CLI 参数解析
-├── pipelines/               ← 各阶段 pipeline 实现
-├── fusion/                  ← 融合引擎（权重拟合 + 加权融合 + 分类器桥接）
-├── runners/                 ← 模型注册与调度
-├── utils/                   ← 公共工具
-├── data/                    ← 数据文件（shandong_pmos_hourly.xlsx）
-├── requirements.txt
-│
-├── lightGBM/                ← LightGBM 日前/实时 pipeline
-├── RT916_SpikeFusionNet/    ← RT916 脉冲融合网络
-├── SGDFNet/                 ← SGDFNet 分段门控融合
-├── TimeMixer/               ← TimeMixer（PyTorch）
-├── TimesFM/                 ← TimesFM 时序基础模型
-├── ExtremPriceClf/          ← 极端电价分类器
-│
-└── docs/                    ← 跨模型共享文档
-    ├── metrics_calculation.md
-    ├── 实验运行约定.md
-    └── 项目执行逻辑与陪跑步骤对齐.md
-```
+## 模型架构
+
+| 模型 | 设备 | 目标 | 实现来源 |
+|------|------|------|----------|
+| LightGBM | CPU | Dayahead | EPF v1.0（`--epf-v1-root`） |
+| TimesFM | CPU | Dayahead + Realtime | EPF v1.0（`--epf-v1-root`） |
+| TimeMixer | GPU | Dayahead + Realtime | v2.0（内部 early stopping / calibration） |
+| SGDFNet | CPU | Realtime | v2.0（内部 val_days 校准） |
+| RT916 (SpikeFusionNet) | GPU | Realtime | v2.0（内部 DA-RT 联动） |
+
+- **LightGBM / TimesFM**：完全复刻 EPF v1.0 最佳实现，通过 `runners/adapters/` 统一 adapter 调用。
+- **TimeMixer / RT916 / SGDFNet**：保留内部 early stopping 和 calibration split，这些是模型内部优化，不是给融合学习器的 validation tap。
+
+---
 
 ## 快速上手
 
-### 1. 安装依赖
+### 安装与权重
 
 ```bash
 pip install -r requirements.txt
+# TimesFM 权重: models/timesFM/config.json + model.safetensors
 ```
 
-依赖包括:`numpy` / `pandas` / `scikit-learn` / `torch` / `pyyaml` / `joblib` /
-`python-dotenv` / `openpyxl` / `chinese-calendar` / `borax` / `huggingface_hub[cli]` /
-`safetensors`。
-
-若需使用 TimesFM,还需安装 `timesfm` 包本体。有两种方式:
-
-**方式 A: 从本项目内置的 TimesFM 目录安装（推荐）**
+### 核心命令
 
 ```bash
-pip install -e TimesFM/[xreg]
+# 2.1 推荐：一键完整生产链路
+python main.py --pipeline ledger_full --date 2026-02-24 \
+    --epf-v1-root "D:\作业\大创_挑战杯_互联网\大学生创新创业计划\大创实现\其他资料\epf"
+
+# 30 天历史回填（可交付前预跑，过夜）
+python main.py --pipeline ledger_backfill --start 2026-01-25 --end 2026-02-23 \
+    --epf-v1-root "D:\作业\大创_挑战杯_互联网\大学生创新创业计划\大创实现\其他资料\epf"
+
+# 分阶段调试
+python main.py --pipeline ledger_predict --date 2026-02-24 --epf-v1-root "..."
+python main.py --pipeline ledger_weight --date 2026-02-24
+python main.py --pipeline ledger_fuse --date 2026-02-24
+python main.py --pipeline ledger_classifier --date 2026-02-24
 ```
 
-**方式 B: 从外部 epf 项目的 TF 目录安装**
+### 旧 2.0 pipeline（保留）
 
 ```bash
-pip install -e <epf_project_path>/TF[xreg]
+python main.py 2026-06-19   # 等价于 --pipeline full
+python main.py --pipeline model_stage --date 2026-06-19
+python main.py --pipeline learner_stage --date 2026-06-19
+python main.py --pipeline fuse_stage --date 2026-06-19
+python main.py --pipeline classifier_stage --date 2026-06-19
 ```
 
-其中 `<epf_project_path>` 为 `epf` 项目主目录(例如 `D:\作业\...\epf`),`[xreg]` 包含 `scikit-learn` 等协变量回归依赖。
+---
 
-### 2. 下载 TimesFM 模型权重
+## 关键业务口径
 
-> **重要**:TimesFM 的预训练权重文件(~882 MB)不包含在 git 仓库中(`.gitignore` 排除了 `models/` 目录)。
-> 如果缺少权重文件,TimesFM 会在 model_stage 中直接报错并导致该模型被排除出融合。
+| 口径 | 值 |
+|------|-----|
+| Dayahead cutoff | D-1 全日数据 |
+| Realtime cutoff | **D-1 14:00**（`--realtime-cutoff-hour 14`） |
+| TimesFM 设备 | **CPU**（不入 GPU queue） |
+| LightGBM/TimesFM EPF v1.0 | **exact** 模式（`--epf-v1-mode exact`），无 `--epf-v1-root` 直接失败 |
+| TimeMixer full_refit | train+valid 全量 refit（`--timemixer-full-refit`） |
+| RT916 realtime | AMP 训练 / FP32 推理导出（`asof_hour=14`） |
+| SGDFNet | `decision_hour=14`，val_days 仅用于内部校准 |
+| 权重学习 | BGEW daily from ledger，day_gate 0.3-0.85（含最近一周 boost） |
+| 主指标 | SMAPE-floor50（per-value clip）+ 0.7*smape + 0.3*mae_percent |
 
-将以下两个文件下载到 `models/timesFM/` 目录:
+---
 
-```bash
-# HuggingFace 镜像（国内推荐）
-curl -L -o models/timesFM/config.json https://hf-mirror.com/google/timesfm-2.5-200m-pytorch/resolve/main/config.json
-curl -L -o models/timesFM/model.safetensors https://hf-mirror.com/google/timesfm-2.5-200m-pytorch/resolve/main/model.safetensors
-
-# 或 HuggingFace 官方（需科学上网）
-curl -L -o models/timesFM/config.json https://huggingface.co/google/timesfm-2.5-200m-pytorch/resolve/main/config.json
-curl -L -o models/timesFM/model.safetensors https://huggingface.co/google/timesfm-2.5-200m-pytorch/resolve/main/model.safetensors
-```
-
-下载后 `models/timesFM/` 应包含:
-```
-models/timesFM/
-├── config.json           (~4 KB)
-└── model.safetensors     (~882 MB)
-```
-
-验证:如果 TimesFM 权重缺失,运行时会看到明确的报错信息:
-```
-RuntimeError: TimesFM model weights not available: ...
-Please download google/timesfm-2.5-200m-pytorch to models/timesFM/
-```
-
-### 3. 准备数据
-
-`RT916_SpikeFusionNet` 需要山东省 PMOS 小时级电力数据(`.xlsx` 格式),
-参见 `RT916_SpikeFusionNet/configs/default_cli.json` 中的 `RAW_DF_PATH` 字段。
-
-`SGDFNet` 通过 `data_contract.py` 定义的契约读取数据。
-
-`TimeMixer` 接受 GBK / UTF-8 / UTF-8-SIG 编码的 CSV,需包含以下列:
-`ds` / `day_ahead_clearing_price` / `realtime_price` / `load` / `wind` / `solar` /
-`interconnect` / `bidding_space`。
-
-### 4. 运行各模型
-
-```bash
-# RT916
-cd RT916_SpikeFusionNet && python run.py
-
-# SGDFNet(以 protocol B 为例)
-cd SGDFNet && python scripts/run_protocol_b.py
-
-# TimeMixer
-python TimeMixer/pipeline_timemixer.py --help
-
-# TimesFM
-python TimesFM/pipeline.py --help
-```
-
-详细使用方式见各子项目 README:
-- RT916:[`RT916_SpikeFusionNet/README_RT916.md`](./RT916_SpikeFusionNet/README_RT916.md)
-- SGDFNet:[`SGDFNet/README.md`](./SGDFNet/README.md)
-
-## 端到端四阶段运行(推荐)
-
-项目当前的标准运行链路为 **同步数据 → 模型训练/预测 → 学习器学习权重 → 加权融合 → 负电价分类器校正**。四个阶段必须按顺序执行,且统一使用 [`main.py`](./main.py) 入口。
-
-### 一行命令（推荐）
-
-```bash
-python main.py 2026-06-19
-```
-
-等价于 `--pipeline full --date 2026-06-19`,自动串行执行全部四个阶段,日前3个模型 + 实时4个模型全部参与,最终输出到 `daily_runs/2026-06-19/` 下的 `final/` 文件夹。
-
-如需指定模型子集或其他参数:
-
-```bash
-# 只跑指定模型
-python main.py 2026-06-19 --stage-models lightgbm,timemixer
-
-# 只用日前模型
-python main.py 2026-06-19 --target dayahead
-```
-
-### 分阶段执行
-
-也可以逐阶段运行（适合调试或断点续跑）:
-
-```bash
-# 阶段 0: 同步云端/数据库最新数据
-#   - 优先尝试从 MySQL 数据库拉取(需配置 DB_HOST/DB/DB_USER/DB_PWD,见 .env 说明)
-#   - 数据库失败时自动回退到七牛云 HTTP 下载最新 Excel
-python main.py --pipeline sync_dataset
-
-# 阶段 1: 模型训练与预测(日前 + 实时)
-#   --date 为要预测的目标日期,例如明天
-python main.py --pipeline model_stage --target both --date 2026-06-19 \
-    --data-path data/shandong_pmos_hourly.xlsx \
-    --training-months 12 --max-gpu-workers 1 --max-cpu-workers 2
-
-# 阶段 2: 学习器在验证集上学习分时段权重(日前 + 实时)
-#   必须在 model_stage 完成后执行
-python main.py --pipeline learner_stage --target both --date 2026-06-19 \
-    --data-path data/shandong_pmos_hourly.xlsx --training-months 12
-
-# 阶段 3: 使用学习到的权重对预测结果进行加权融合
-#   必须在 learner_stage 完成后执行
-python main.py --pipeline fuse_stage --target both --date 2026-06-19
-
-# 阶段 4: 实时预测结果输入负电价/极值分类器做后处理校正
-#   仅支持 realtime,必须在 fuse_stage 完成后执行
-python main.py --pipeline classifier_stage --target realtime --date 2026-06-19 \
-    --data-path data/shandong_pmos_hourly.xlsx
-```
-
-最终输出目录结构示例(`daily_runs/2026-06-19/`):
+## 输出目录结构
 
 ```
-daily_runs/2026-06-19/
-├── dayahead/
-│   ├── model_outputs/{lightgbm,timemixer,timesfm}/
-│   ├── learner_outputs/weights.csv
-│   └── final/fused_predictions.csv
-└── realtime/
-    ├── model_outputs/{rt916,sgdfnet,timemixer,timesfm}/
-    ├── learner_outputs/weights.csv
-    ├── final/fused_predictions.csv
-    └── compat_fusion/
-        ├── realtime/fused_predictions_corrected.csv
-        └── classifier/2026-06-19_2026-06-19_clf.xlsx
+outputs/
+  ledger/                         # 跨日期累积账本
+    dayahead/
+      prediction/prediction_ledger.parquet + .csv
+      actual/actual_ledger.parquet + .csv
+      weight/weight_history.csv
+    realtime/
+      prediction/prediction_ledger.parquet + .csv
+      actual/actual_ledger.parquet + .csv
+      weight/weight_history.csv
+
+  runs/
+    YYYY-MM-DD/                   # 单日运行目录
+      run_manifest.json           # 运行清单
+      logs/pipeline.log
+      dayahead/
+        prediction/all_model_predictions_long.csv
+        weight/weights.csv + dynamic_weight_trace.csv + candidate_metrics.csv + coverage_report.csv
+        fuse/fused_predictions.csv + fused_debug.csv
+        final/dayahead_final_predictions.csv
+      realtime/
+        prediction/all_model_predictions_long.csv
+        weight/weights.csv + ...
+        fuse/fused_predictions.csv + fused_debug.csv
+        final/realtime_final_predictions.csv + realtime_final_predictions_corrected.csv
+      final/
+        dayahead_final_predictions.csv
+        realtime_final_predictions.csv
+        realtime_final_predictions_corrected.csv
+        submission_ready.csv
 ```
 
-### 数据库同步配置
+命名约定：
+- **prediction** = 各模型真实预测
+- **weight** = 从过去 30 天账本学出的权重
+- **fuse** = 加权融合结果
+- **final** = 最终交付文件
+- **ledger** = 跨日期累计的预测/实际值账本
 
-`--pipeline sync_dataset` 优先读取 MySQL。需在项目根目录或相邻 `epf/` 目录的 `.env` 文件中配置:
-
-```env
-DB_HOST=your_db_host
-DB=your_database
-DB_USER=your_user
-DB_PWD=your_password
-```
-
-若数据库不可达,会自动回退到七牛云 HTTP 下载 (`http://qiniu.dirx.com.cn/workspace/eprice_forecast/shandong_pmos_hourly_20220101_YYYYMMDD.xlsx`)。
-
-## 输出文件与最终预测值
-
-每次运行以 `daily_runs/{日期}/{目标}/` 为根目录，四个阶段的输出如下：
-
-| 阶段 | 文件路径 | 关键列 | 说明 |
-|------|---------|--------|------|
-| model_stage | `model_outputs/{模型名}/forecast_predictions.csv` | `时刻`, `预测值` | 各模型独立预测结果 |
-| learner_stage | `learner_outputs/weights.csv` | `period`, `model_name`, `weight` | SLSQP 拟合的分时段融合权重 |
-| fuse_stage | `final/fused_predictions.csv` | `y_fused` | **融合预测值（校正前）** |
-| classifier_stage | `compat_fusion/realtime/fused_predictions_corrected.csv` | `y_fused_corrected` | **实时最终预测值（经极端电价校正）** |
-
-**最终预测值取法：**
-
-- **日前 (DA)**：以 `final/fused_predictions.csv` 的 `y_fused` 列为准（日前无分类器校正）。
-- **实时 (RT)**：以 `compat_fusion/realtime/fused_predictions_corrected.csv` 的 `y_fused_corrected` 列为准。该列在 `y_fused` 基础上，对分类器判定为极端负电价的时段（`final_pred=1` 且 `y_fused ≤ 100`）修正为 `-80.0` 元/MWh。
+---
 
 ## SMAPE 计算口径
 
-项目统一使用 **SMAPE-floor50** 作为业务评估指标，计算公式见 [`docs/metrics_calculation.md`](./docs/metrics_calculation.md)，核心规则：
+严格按 `docs/metrics_calculation.md`：
 
-1. **clip50 裁剪**：计算前对 `y_true` 和 `y_pred` 均做 `max(value, 50)` 处理，避免低价区间对误差的放大效应。负电价和接近零的价格都会被裁剪到 50。
-2. **计算公式**：`SMAPE = mean(|pred_clip - true_clip| / ((|pred_clip| + |true_clip|) / 2)) × 100%`
-3. **代码位置**：`fusion/metrics.py` → `smape_floor50(y_true, y_pred)`
-4. **计算基准**：
-   - 评估**融合效果**时，使用 `fused_predictions.csv` 的 `y_fused` 列（校正前）
-   - 评估**最终业务效果**时，使用 `fused_predictions_corrected.csv` 的 `y_fused_corrected` 列（校正后，仅 RT）
-   - 注意：极端电价校正可能改善也可能劣化 SMAPE，取决于分类器精度
+```python
+y_clip  = max(y_true, 50)
+pred_clip = max(y_pred, 50)
+SMAPE = mean(|pred_clip - y_clip| / ((|pred_clip| + |y_clip|) / 2)) * 100
+```
 
-## CLI 参数说明
+GEF learner 损失：
+```python
+loss = 0.7 * smape_floor50 + 0.3 * mae_percent
+mae_percent = 100 * MAE / max(median(|y_true_clip|), 50)
+```
 
-以下为 `main.py` 的完整参数列表。标注 **[可调]** 的参数可根据实际场景调整，其余参数建议使用默认值。
+---
+
+## 新 CLI 参数（2.1 ledger）
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
-| `date`（位置参数） | None | **[可调]** 目标日期（YYYY-MM-DD）。`python main.py 2026-06-19` 等价于 `--pipeline full --date 2026-06-19` |
-| `--pipeline` | `full` | 运行阶段：`full`（一键全流程）/ `sync_dataset` / `model_stage` / `learner_stage` / `fuse_stage` / `classifier_stage` / `predict` / `train` / `evaluate` / `fusion` |
-| `--date` | None | **[可调]** 目标预测日期（YYYY-MM-DD），即"D日"。与位置参数二选一 |
-| `--start` / `--end` | None | **[可调]** 批量预测的起止日期，与 `--date` 二选一 |
-| `--target` | `both` | **[可调]** 预测目标：`dayahead`（仅日前）、`realtime`（仅实时）、`both`（两者） |
-| `--data-path` | `data/shandong_pmos_hourly.xlsx` | **[可调]** 数据文件路径，甲方环境需改为实际路径 |
-| `--training-months` | `12` | **[可调]** 训练数据回溯月数。增大可提升训练数据量但增加训练时间，12个月为推荐值 |
-| `--validation-days` | `30` | **[可调]** 验证窗口天数。影响 SLSQP 权重拟合的样本量，30天（720行）为推荐值。减小可加速但权重可能不稳定 |
-| `--stage-models` | `formal` | **[可调]** 模型集合：`formal`（正式模型集）、`all`（全部）、或逗号分隔的模型名 |
-| `--max-cpu-workers` | `2` | **[可调]** CPU 并行数。LightGBM/SGDFNet 使用 CPU，建议设为 CPU 核心数的一半 |
-| `--max-gpu-workers` | `1` | **[可调]** GPU 并行数。RT916/TimeMixer/TimesFM 使用 GPU，单卡建议保持 1 |
-| `--weight-lower-bound` | `-0.5` | 融合权重下界。允许负权重（对冲），一般不需调整 |
-| `--weight-upper-bound` | `1.2` | 融合权重上界。允许单模型权重 >1（配合负权重对冲），一般不需调整 |
-| `--output-root` | `outputs/unified_runs` | 模型输出根目录 |
-| `--daily-run-root` | `daily_runs` | 四阶段链路输出根目录 |
-| `--use-classifier` | `false` | 是否启用极端电价分类器（仅 RT） |
-| `--clf-data` | `ExtremPriceClf/data/260525.xlsx` | **[可调]** 分类器训练数据路径。默认文件仅覆盖到 2026-05-26，更晚日期需指定更新的数据文件 |
-| `--use-predicted-temp` | `false` | 是否使用预测温度（而非实际温度），用于未来实际场景 |
-| `--segment-count` | `3` | 时段分段数（1_8 / 9_16 / 17_24），不建议修改 |
-| `--seed` | `42` | 随机种子 |
-| `--conda-env` | `""` | Conda 环境名。留空使用当前 Python 环境 |
+| `--epf-v1-root` | None | **[必需]** EPF v1.0 LightGBM/TimesFM 仓库路径 |
+| `--epf-v1-mode` | `exact` | `exact`（忠实 v1）或 `cutoff_safe`（截断数据） |
+| `--allow-v2-fallback` | False | 允许 LightGBM/TimesFM fallback 到 2.0 |
+| `--realtime-cutoff-hour` | `14` | Realtime 截止小时（D-1 14:00） |
+| `--recent-week-boost` | True | 最近一周 day_gate 平滑增强 |
+| `--recent-week-max-gate` | `0.85` | day_gate 上限 |
+| `--timemixer-epochs` | `80` | TimeMixer 训练轮数 |
+| `--timemixer-patience` | `15` | Early stopping 耐心值 |
+| `--timemixer-batch-size` | `16` | 批大小 |
+| `--timemixer-full-refit` | True | train+valid 全量 refit |
+| `--timemixer-seeds` | `42` | 随机种子 |
+| `--ledger-root` | `outputs/ledger` | 账本根目录 |
+| `--runs-root` | `outputs/runs` | 单日运行根目录 |
+| `--allow-missing-models` | False | 允许缺少模型继续 |
+| `--allow-equal-weight-fallback` | False | 允许无权重时使用等权 |
+| `--strict-classifier` | False | 分类器失败时中断 pipeline |
 
-### 常用调参建议
+---
 
-- **加速运行**：减小 `--validation-days`（如 14），减少 `--training-months`（如 6），但会损失权重拟合质量和训练数据量
-- **提升稳定性**：增大 `--validation-days`（如 60），但 DA 模型训练数据会相应减少
-- **减少模型数**：`--stage-models lightgbm,timemixer` 只跑指定模型，适合快速调试
-- **甲方部署**：必须修改 `--data-path` 为实际数据路径，确认 `--clf-data` 数据覆盖到目标日期
+## Runtime 目标
+
+| 任务 | 目标 |
+|------|------|
+| 单日 `ledger_full` | **~30 分钟** |
+| 30 天 `ledger_backfill` | 过夜运行 |
+| Dayahead 3 模型 | CPU queue 并行 |
+| Realtime 4 模型 | GPU queue 串行 |
+
+---
+
+## 调度策略
+
+```
+CPU queue (max_workers=2):
+  LightGBM v1.0
+  TimesFM v1.0 CPU
+  SGDFNet
+  数据处理
+
+GPU queue (max_workers=1, serial):
+  TimeMixer
+  RT916
+```
 
 ## 跨模型文档
 
-- [`docs/metrics_calculation.md`](./docs/metrics_calculation.md) — 三个模型统一使用的评估指标计算口径(SMAPE、MAPE、MAE、RMSE、方向准确率等)
-- [`docs/实验运行约定.md`](./docs/实验运行约定.md) — 实验运行流程约定
-- [`docs/项目执行逻辑与陪跑步骤对齐.md`](./docs/项目执行逻辑与陪跑步骤对齐.md) — 项目执行逻辑与陪跑步骤说明
-
-## 复现检查清单
-
-在新机器或新环境中复现项目时,按顺序检查以下事项:
-
-| # | 检查项 | 命令 / 方法 |
-|---|--------|-----------|
-| 1 | Python 环境 | `python --version` (需 >= 3.10) |
-| 2 | pip 依赖 | `pip install -r requirements.txt` |
-| 3 | TimesFM 包 | `pip install -e TimesFM/[xreg]` 或 `pip install -e TF/[xreg]` |
-| 4 | TimesFM 权重 | 确认 `models/timesFM/config.json` 和 `models/timesFM/model.safetensors` 存在 |
-| 5 | 数据文件 | 确认 `data/shandong_pmos_hourly.xlsx` 存在 |
-| 6 | GPU 可用 | `python -c "import torch; print(torch.cuda.is_available())"` |
-| 7 | 快速验证 | `python main.py 2026-02-01 --stage-models lightgbm --validation-days 3` (2 分钟内完成) |
-
-如果第 7 步成功运行并输出 `FULL PIPELINE COMPLETE`,说明环境配置正确。
+- [`docs/metrics_calculation.md`](./docs/metrics_calculation.md) — SMAPE, MAPE, MAE, RMSE 等
+- [`docs/实验运行约定.md`](./docs/实验运行约定.md) — 实验流程
+- [`docs/项目执行逻辑与陪跑步骤对齐.md`](./docs/项目执行逻辑与陪跑步骤对齐.md) — 陪跑步骤
 
 ## 许可
 
-本仓库以 [MIT License](./LICENSE) 发布。
-`TimeMixer/pipeline_timemixer.py` 版权归原作者(commit `e76bd45` 作者)所有,采用同样的 MIT 许可。
-
-## 贡献
-
-- `RT916_SpikeFusionNet` / `SGDFNet` / 顶层文档:[disdorqin](https://github.com/disdorqin)
-- `TimeMixer/pipeline_timemixer.py`:[Jonathan-ysy](https://github.com/Jonathan-ysy)(commit `e76bd45`)
+MIT License

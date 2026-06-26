@@ -59,7 +59,8 @@ def run_ledger_predict(args: Any) -> dict:
     args : argparse.Namespace
         Must contain: date, data_path, epf_v1_root, output_root (optional),
         ledger_root, runs_root, max_cpu_workers, max_gpu_workers,
-        allow_missing_models, force.
+        allow_missing_models, force, realtime_cutoff_hour,
+        allow_v2_fallback, epf_v1_mode.
 
     Returns
     -------
@@ -71,12 +72,29 @@ def run_ledger_predict(args: Any) -> dict:
 
     data_path = args.data_path
     epf_root = getattr(args, "epf_v1_root", None)
+    allow_v2_fb = getattr(args, "allow_v2_fallback", False)
+    epf_v1_mode = getattr(args, "epf_v1_mode", "exact")
     ledger_root = Path(getattr(args, "ledger_root", "outputs/ledger"))
     runs_root = Path(getattr(args, "runs_root", "outputs/runs"))
     max_cpu = getattr(args, "max_cpu_workers", 2)
     max_gpu = getattr(args, "max_gpu_workers", 1)
     allow_missing = getattr(args, "allow_missing_models", False)
     force = getattr(args, "force", False)
+    rt_cutoff_hour = getattr(args, "realtime_cutoff_hour", 14)
+
+    # Validate EPF v1 root is present for LightGBM/TimesFM
+    if not epf_root or not Path(epf_root).exists():
+        if allow_v2_fb:
+            logger.warning(
+                "EPF v1 root not found, but --allow-v2-fallback enabled. "
+                "LightGBM/TimesFM will use 2.0 implementations."
+            )
+        else:
+            raise FileNotFoundError(
+                "EPF v1 root not found. Please provide --epf-v1-root. "
+                "LightGBM and TimesFM require EPF v1.0 for the ledger pipeline. "
+                "Or pass --allow-v2-fallback to use 2.0 implementations."
+            )
 
     # Setup directories
     run_dir = runs_root / target_date
@@ -92,6 +110,8 @@ def run_ledger_predict(args: Any) -> dict:
     manifest = {
         "pipeline": "ledger_predict",
         "target_date": target_date,
+        "realtime_cutoff_hour": rt_cutoff_hour,
+        "epf_v1_mode": epf_v1_mode,
         "started_at": datetime.now(timezone.utc).isoformat(),
         "status": "running",
         "results": {},
@@ -99,18 +119,25 @@ def run_ledger_predict(args: Any) -> dict:
         "errors": [],
     }
 
-    # Determine cutoff
-    cutoff_date = (pd.Timestamp(target_date) - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+    # Determine cutoffs
+    da_cutoff_date = (pd.Timestamp(target_date) - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+    rt_cutoff_date = f"{da_cutoff_date} {rt_cutoff_hour:02d}:00:00"
+    manifest["data_cutoff_dayahead"] = da_cutoff_date
+    manifest["data_cutoff_realtime"] = rt_cutoff_date
 
     try:
-        # --- Dayahead predictions ---
+        # --- Dayahead predictions (must run BEFORE realtime) ---
+        logger.info("\n>>> Dayahead models starting...")
         da_results = _run_model_set(
             target_date=target_date,
             task="dayahead",
             models=DAYAHEAD_MODELS,
             data_path=data_path,
             epf_root=epf_root,
-            cutoff_date=cutoff_date,
+            allow_v2_fallback=allow_v2_fb,
+            epf_v1_mode=epf_v1_mode,
+            cutoff_date=da_cutoff_date,
+            realtime_cutoff_hour=rt_cutoff_hour,
             run_dir=run_dir,
             max_cpu=max_cpu,
             max_gpu=max_gpu,
@@ -118,14 +145,21 @@ def run_ledger_predict(args: Any) -> dict:
         )
         manifest["results"]["dayahead"] = da_results
 
-        # --- Realtime predictions ---
+        # Write dayahead long table immediately
+        _write_long_table_single(run_dir, target_date, "dayahead", manifest)
+
+        # --- Realtime predictions (after dayahead complete) ---
+        logger.info("\n>>> Realtime models starting...")
         rt_results = _run_model_set(
             target_date=target_date,
             task="realtime",
             models=REALTIME_MODELS,
             data_path=data_path,
             epf_root=epf_root,
-            cutoff_date=cutoff_date,
+            allow_v2_fallback=allow_v2_fb,
+            epf_v1_mode=epf_v1_mode,
+            cutoff_date=rt_cutoff_date,
+            realtime_cutoff_hour=rt_cutoff_hour,
             run_dir=run_dir,
             max_cpu=max_cpu,
             max_gpu=max_gpu,
@@ -133,8 +167,8 @@ def run_ledger_predict(args: Any) -> dict:
         )
         manifest["results"]["realtime"] = rt_results
 
-        # --- Collect and write all_model_predictions_long ---
-        _write_long_tables(run_dir, target_date, manifest)
+        # Write realtime long table
+        _write_long_table_single(run_dir, target_date, "realtime", manifest)
 
         # --- Append to prediction ledger ---
         _append_all_to_ledger(run_dir, target_date, ledger_root, manifest)
@@ -171,7 +205,10 @@ def _run_model_set(
     models: list[str],
     data_path: str,
     epf_root: Optional[str],
+    allow_v2_fallback: bool,
+    epf_v1_mode: str,
     cutoff_date: str,
+    realtime_cutoff_hour: int,
     run_dir: Path,
     max_cpu: int,
     max_gpu: int,
@@ -192,12 +229,17 @@ def _run_model_set(
             logger.info(f"[{task}/{model_name}] Cache hit: {output_path}")
             try:
                 cached_df = pd.read_csv(output_path)
-                results[model_name] = {
-                    "status": "cached",
-                    "output_path": str(output_path),
-                    "rows": len(cached_df),
-                }
-                continue
+                # Validate cached output
+                errors = validate_daily_predictions(cached_df, target_date, model_name, task)
+                if not errors:
+                    results[model_name] = {
+                        "status": "cached",
+                        "output_path": str(output_path),
+                        "rows": len(cached_df),
+                    }
+                    continue
+                else:
+                    logger.warning(f"Cache invalid for {model_name}, re-running: {errors}")
             except Exception:
                 logger.warning(f"Cache read failed, re-running {model_name}")
 
@@ -213,7 +255,10 @@ def _run_model_set(
                 "target_date": target_date,
                 "data_path": data_path,
                 "epf_root": epf_root,
+                "allow_v2_fallback": allow_v2_fallback,
+                "epf_v1_mode": epf_v1_mode,
                 "cutoff_date": cutoff_date,
+                "realtime_cutoff_hour": realtime_cutoff_hour,
                 "output_path": str(output_path),
             },
         )
@@ -253,34 +298,45 @@ def _predict_model(
     target_date: str,
     data_path: str,
     epf_root: Optional[str],
+    allow_v2_fallback: bool,
+    epf_v1_mode: str,
     cutoff_date: str,
+    realtime_cutoff_hour: int,
     output_path: str,
 ) -> pd.DataFrame:
     """
     Run a single model prediction and save to CSV.
+    Fails fast if validation errors are detected.
 
     Returns the standardized DataFrame.
     """
     logger.info(f"Predicting: {model_name}/{task} on {target_date}")
 
     if model_name == "lightgbm":
-        df = _predict_lightgbm(task, target_date, data_path, epf_root, cutoff_date)
+        df = _predict_lightgbm(task, target_date, data_path, epf_root, allow_v2_fallback, epf_v1_mode, cutoff_date)
     elif model_name == "timesfm":
-        df = _predict_timesfm(task, target_date, data_path, epf_root, cutoff_date)
+        df = _predict_timesfm(task, target_date, data_path, epf_root, allow_v2_fallback, epf_v1_mode, cutoff_date)
     elif model_name == "timemixer":
-        df = _predict_timemixer(task, target_date, data_path, cutoff_date)
+        df = _predict_timemixer(task, target_date, data_path, cutoff_date, realtime_cutoff_hour)
     elif model_name == "sgdfnet":
-        df = _predict_sgdfnet(task, target_date, data_path, cutoff_date)
+        df = _predict_sgdfnet(task, target_date, data_path, cutoff_date, realtime_cutoff_hour)
     elif model_name == "rt916":
-        df = _predict_rt916(task, target_date, data_path, cutoff_date)
+        df = _predict_rt916(task, target_date, data_path, cutoff_date, realtime_cutoff_hour)
     else:
         raise ValueError(f"Unknown model: {model_name}")
 
-    # Validate
+    # Validate — FAIL FAST on errors
     errors = validate_daily_predictions(df, target_date, model_name, task)
+    # Add additional checks
+    if df["y_pred"].isna().all():
+        errors.append(f"{model_name}/{task}: all y_pred values are NaN")
+    if "business_day" in df.columns and (df["business_day"] != target_date).any():
+        errors.append(f"{model_name}/{task}: business_day mismatch for target {target_date}")
+
     if errors:
-        logger.error(f"Validation errors for {model_name}/{task}: {errors}")
-        # Don't fail here — let the scheduler handle it
+        err_msg = f"Validation FAILED for {model_name}/{task} on {target_date}: {'; '.join(errors)}"
+        logger.error(err_msg)
+        raise RuntimeError(err_msg)
 
     # Save
     df.to_csv(output_path, index=False)
@@ -298,22 +354,28 @@ def _predict_lightgbm(
     target_date: str,
     data_path: str,
     epf_root: Optional[str],
+    allow_v2_fallback: bool,
+    epf_v1_mode: str,
     cutoff_date: str,
 ) -> pd.DataFrame:
-    """LightGBM prediction via EPF v1.0 adapter."""
+    """LightGBM prediction via EPF v1.0 adapter (fail-fast without v1 root)."""
     if epf_root and Path(epf_root).exists():
         from runners.adapters.lightgbm_v1 import LightGBMV1Adapter
-        adapter = LightGBMV1Adapter(epf_root)
+        adapter = LightGBMV1Adapter(epf_root, mode=epf_v1_mode)
         return adapter.predict(
             target_date=target_date,
             target=task,
             data_path=data_path,
             cutoff_date=cutoff_date,
         )
-    else:
-        # Fallback: use existing 2.0 LightGBM pipeline
-        logger.info("EPF v1.0 not found, using 2.0 LightGBM")
+    elif allow_v2_fallback:
+        logger.info("EPF v1.0 not found but --allow-v2-fallback, using 2.0 LightGBM")
         return _predict_via_registry("lightgbm", task, target_date, data_path, cutoff_date)
+    else:
+        raise FileNotFoundError(
+            "EPF v1 root not found. LightGBM requires EPF v1.0. "
+            "Provide --epf-v1-root or pass --allow-v2-fallback."
+        )
 
 
 def _predict_timesfm(
@@ -321,21 +383,28 @@ def _predict_timesfm(
     target_date: str,
     data_path: str,
     epf_root: Optional[str],
+    allow_v2_fallback: bool,
+    epf_v1_mode: str,
     cutoff_date: str,
 ) -> pd.DataFrame:
-    """TimesFM prediction via EPF v1.0 adapter (canonical wrapper)."""
+    """TimesFM prediction via EPF v1.0 adapter (canonical single wrapper)."""
     if epf_root and Path(epf_root).exists():
         from runners.adapters.timesfm_v1 import TimesFMV1Adapter
-        adapter = TimesFMV1Adapter(epf_root)
+        adapter = TimesFMV1Adapter(epf_root, mode=epf_v1_mode)
         return adapter.predict(
             target_date=target_date,
             target=task,
             data_path=data_path,
             cutoff_date=cutoff_date,
         )
-    else:
-        logger.info("EPF v1.0 not found, using 2.0 TimesFM")
+    elif allow_v2_fallback:
+        logger.info("EPF v1.0 not found but --allow-v2-fallback, using 2.0 TimesFM")
         return _predict_via_registry("timesfm", task, target_date, data_path, cutoff_date)
+    else:
+        raise FileNotFoundError(
+            "EPF v1 root not found. TimesFM requires EPF v1.0. "
+            "Provide --epf-v1-root or pass --allow-v2-fallback."
+        )
 
 
 def _predict_timemixer(
@@ -343,9 +412,13 @@ def _predict_timemixer(
     target_date: str,
     data_path: str,
     cutoff_date: str,
+    realtime_cutoff_hour: int = 14,
 ) -> pd.DataFrame:
     """TimeMixer prediction using 2.0 model (GPU preferred)."""
-    return _predict_via_registry("timemixer", task, target_date, data_path, cutoff_date)
+    return _predict_via_registry(
+        "timemixer", task, target_date, data_path, cutoff_date,
+        realtime_cutoff_hour=realtime_cutoff_hour,
+    )
 
 
 def _predict_sgdfnet(
@@ -353,9 +426,13 @@ def _predict_sgdfnet(
     target_date: str,
     data_path: str,
     cutoff_date: str,
+    realtime_cutoff_hour: int = 14,
 ) -> pd.DataFrame:
-    """SGDFNet prediction using 2.0 model (CPU preferred)."""
-    return _predict_via_registry("sgdfnet", task, target_date, data_path, cutoff_date)
+    """SGDFNet prediction using 2.0 model (CPU)."""
+    return _predict_via_registry(
+        "sgdfnet", task, target_date, data_path, cutoff_date,
+        realtime_cutoff_hour=realtime_cutoff_hour,
+    )
 
 
 def _predict_rt916(
@@ -363,9 +440,13 @@ def _predict_rt916(
     target_date: str,
     data_path: str,
     cutoff_date: str,
+    realtime_cutoff_hour: int = 14,
 ) -> pd.DataFrame:
-    """RT916 prediction using 2.0 model (GPU preferred)."""
-    return _predict_via_registry("rt916", task, target_date, data_path, cutoff_date)
+    """RT916 prediction using 2.0 model (GPU)."""
+    return _predict_via_registry(
+        "rt916", task, target_date, data_path, cutoff_date,
+        realtime_cutoff_hour=realtime_cutoff_hour,
+    )
 
 
 def _predict_via_registry(
@@ -374,11 +455,10 @@ def _predict_via_registry(
     target_date: str,
     data_path: str,
     cutoff_date: str,
+    realtime_cutoff_hour: int = 14,
 ) -> pd.DataFrame:
     """
     Run prediction via the existing 2.0 model registry.
-
-    Calls model.predict_range() and standardizes the output.
     """
     from runners.registry import get_model_pipeline
 
@@ -397,6 +477,9 @@ def _predict_via_registry(
 
     df = result.frame.copy()
 
+    # Record da_feature_source for realtime models
+    da_source = _get_da_feature_source(model_name, task)
+
     # Standardize
     df = standardize_business_columns(
         df,
@@ -410,49 +493,72 @@ def _predict_via_registry(
         model_version="v2.0",
     )
 
+    # Add da_feature_source if available
+    if da_source:
+        df["da_feature_source"] = da_source
+
     # Keep required columns
     keep_cols = [
         "task", "model_name", "forecast_date", "target_day",
         "business_day", "ds", "hour_business", "period", "y_pred",
-        "data_cutoff", "run_id", "model_version",
+        "data_cutoff", "run_id", "model_version", "da_feature_source",
     ]
     df = df[[c for c in keep_cols if c in df.columns]]
 
     return df
 
 
+def _get_da_feature_source(model_name: str, task: str) -> str:
+    """Return the day-ahead feature source string for a given model+task."""
+    if task == "dayahead":
+        return "none"  # dayahead models don't use DA features
+    return {
+        "timemixer": "timemixer_internal_dayahead_prediction",
+        "rt916": "rt916_internal_joint_dayahead_prediction",
+        "sgdfnet": "sgdfnet_config_da_fill",
+        "timesfm": "timesfm_none",
+    }.get(model_name, "unknown")
+
+
+def _write_long_table_single(
+    run_dir: Path,
+    target_date: str,
+    task: str,
+    manifest: dict,
+):
+    """Write all_model_predictions_long.csv for a single task."""
+    pred_dir = run_dir / task / "prediction"
+    if not pred_dir.exists():
+        return
+
+    pieces = []
+    for csv_file in sorted(pred_dir.glob("*_predictions.csv")):
+        if csv_file.name == "all_model_predictions_long.csv":
+            continue
+        try:
+            df = pd.read_csv(csv_file)
+            pieces.append(df)
+        except Exception as e:
+            manifest["warnings"].append(f"Failed to read {csv_file}: {e}")
+
+    if pieces:
+        long_df = pd.concat(pieces, ignore_index=True)
+        long_path = pred_dir / "all_model_predictions_long.csv"
+        long_df.to_csv(long_path, index=False)
+
+        n_rows = len(long_df)
+        expected = {"dayahead": 72, "realtime": 96}[task]
+        manifest["results"][f"{task}_long_rows"] = n_rows
+        if n_rows != expected:
+            manifest["warnings"].append(
+                f"{task} long table: expected {expected} rows, got {n_rows}"
+            )
+        logger.info(f"{task} long table: {n_rows} rows → {long_path}")
+
+
 # ===========================================================================
 # Output aggregation
 # ===========================================================================
-
-def _write_long_tables(run_dir: Path, target_date: str, manifest: dict):
-    """Write all_model_predictions_long.csv for each task."""
-    for task in ["dayahead", "realtime"]:
-        pred_dir = run_dir / task / "prediction"
-        if not pred_dir.exists():
-            continue
-
-        pieces = []
-        for csv_file in sorted(pred_dir.glob("*_predictions.csv")):
-            try:
-                df = pd.read_csv(csv_file)
-                pieces.append(df)
-            except Exception as e:
-                manifest["warnings"].append(f"Failed to read {csv_file}: {e}")
-
-        if pieces:
-            long_df = pd.concat(pieces, ignore_index=True)
-            long_path = pred_dir / "all_model_predictions_long.csv"
-            long_df.to_csv(long_path, index=False)
-
-            n_rows = len(long_df)
-            expected = {"dayahead": 72, "realtime": 96}[task]
-            manifest["results"][f"{task}_long_rows"] = n_rows
-            if n_rows != expected:
-                manifest["warnings"].append(
-                    f"{task} long table: expected {expected} rows, got {n_rows}"
-                )
-            logger.info(f"{task} long table: {n_rows} rows → {long_path}")
 
 
 def _append_all_to_ledger(

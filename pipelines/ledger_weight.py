@@ -58,6 +58,9 @@ def run_ledger_weight(args: Any) -> dict:
     ledger_root = Path(getattr(args, "ledger_root", "outputs/ledger"))
     runs_root = Path(getattr(args, "runs_root", "outputs/runs"))
     window_days = getattr(args, "validation_days", 30)
+    recent_week_boost = getattr(args, "recent_week_boost", True)
+    recent_week_max_gate = getattr(args, "recent_week_max_gate", 0.85)
+    allow_missing = getattr(args, "allow_missing_models", False)
 
     logger.info(f"=== ledger_weight: {target_date} (window={window_days}d) ===")
 
@@ -91,6 +94,8 @@ def run_ledger_weight(args: Any) -> dict:
                 ledger_root=ledger_root,
                 runs_root=runs_root,
                 expected_models=DAYAHEAD_MODELS if task == "dayahead" else REALTIME_MODELS,
+                recent_week_boost=recent_week_boost,
+                recent_week_max_gate=recent_week_max_gate,
             )
             manifest["results"][task] = task_result
 
@@ -129,6 +134,8 @@ def _learn_weights_for_task(
     ledger_root: Path,
     runs_root: Path,
     expected_models: list[str],
+    recent_week_boost: bool = True,
+    recent_week_max_gate: float = 0.85,
 ) -> dict:
     """Learn weights for a single task (dayahead or realtime)."""
     result = {"task": task, "status": "running"}
@@ -158,6 +165,8 @@ def _learn_weights_for_task(
         actual_ledger=act_ledger,
         target_day=target_date,
         window_days=len(window_days_list),
+        recent_week_boost=recent_week_boost,
+        recent_week_max_gate=recent_week_max_gate,
     )
 
     result["training_rows"] = len(training)

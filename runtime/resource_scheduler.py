@@ -3,8 +3,8 @@ Resource scheduler for ledger pipeline.
 
 Manages CPU and GPU task queues with controlled concurrency.
 
-CPU queue:  LightGBM, SGDFNet, TimesFM (CPU mode), data processing
-GPU queue:  TimeMixer, RT916, TimesFM (GPU mode)
+CPU queue:  LightGBM, SGDFNet, TimesFM (fixed CPU), data processing
+GPU queue:  TimeMixer, RT916
 
 Default concurrency:
   max_cpu_workers = 2
@@ -31,8 +31,9 @@ from typing import Any, Callable, Optional
 logger = logging.getLogger(__name__)
 
 # Model → device classification
-CPU_MODELS = {"lightgbm", "sgdfnet"}
-GPU_MODELS = {"timemixer", "rt916", "timesfm"}
+# TimesFM is fixed CPU in the ledger pipeline (not GPU)
+CPU_MODELS = {"lightgbm", "sgdfnet", "timesfm"}
+GPU_MODELS = {"timemixer", "rt916"}
 
 
 @dataclass

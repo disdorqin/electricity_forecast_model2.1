@@ -60,10 +60,24 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--daily-run-root", default="daily_runs")
     parser.add_argument("--validation-days", type=int, default=30, help="Number of days for the validation window (default: 30). Used by model_stage for weight fitting.")
     # Ledger pipeline parameters
-    parser.add_argument("--epf-v1-root", default=None, help="Path to EPF v1.0 repository root (required for LightGBM/TimesFM v1 adapters)")
+    parser.add_argument("--epf-v1-root", default=None, help="[REQUIRED for ledger] Path to EPF v1.0 repository root for LightGBM/TimesFM adapters")
+    parser.add_argument("--epf-v1-mode", default="exact", choices=["exact", "cutoff_safe"], help="EPF v1.0 adapter mode: exact (default, faithful v1 behavior) or cutoff_safe (truncate data)")
+    parser.add_argument("--allow-v2-fallback", action="store_true", default=False, help="Allow LightGBM/TimesFM to fall back to 2.0 implementations when EPF v1 is unavailable")
     parser.add_argument("--allow-missing-models", action="store_true", default=False, help="Allow ledger pipeline to continue even if some models fail")
+    parser.add_argument("--allow-equal-weight-fallback", action="store_true", default=False, help="Allow fusion to use equal weights when no period weights are available")
     parser.add_argument("--strict-classifier", action="store_true", default=False, help="Fail ledger_full if classifier fails")
     parser.add_argument("--force", action="store_true", default=False, help="Force retrain even if checkpoint exists")
     parser.add_argument("--ledger-root", default="outputs/ledger", help="Root directory for ledger files")
     parser.add_argument("--runs-root", default="outputs/runs", help="Root directory for daily run outputs")
+    # Realtime cutoff
+    parser.add_argument("--realtime-cutoff-hour", type=int, default=14, help="Cutoff hour for realtime models on D-1 (default: 14)")
+    # Recent week boost
+    parser.add_argument("--recent-week-boost", action="store_true", default=True, help="Enable recent-week boost in day_gate weighting (default: enabled)")
+    parser.add_argument("--recent-week-max-gate", type=float, default=0.85, help="Maximum day_gate with recent-week boost (default: 0.85)")
+    # TimeMixer tuning
+    parser.add_argument("--timemixer-epochs", type=int, default=80, help="TimeMixer training epochs (default: 80)")
+    parser.add_argument("--timemixer-patience", type=int, default=15, help="TimeMixer early stopping patience (default: 15)")
+    parser.add_argument("--timemixer-batch-size", type=int, default=16, help="TimeMixer batch size (default: 16)")
+    parser.add_argument("--timemixer-full-refit", action="store_true", default=True, help="Enable TimeMixer full refit on train+valid after early stopping (default: enabled)")
+    parser.add_argument("--timemixer-seeds", type=int, default=42, help="TimeMixer random seed (default: 42)")
     return parser

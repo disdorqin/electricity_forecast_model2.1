@@ -29,15 +29,6 @@ logger = logging.getLogger(__name__)
 def run_ledger_fuse(args: Any) -> dict:
     """
     Main entry for --pipeline ledger_fuse.
-
-    Parameters
-    ----------
-    args : argparse.Namespace
-        Must contain: date, ledger_root, runs_root.
-
-    Returns
-    -------
-    dict with fusion manifest.
     """
     target_date = args.date
     if not target_date:
@@ -45,6 +36,7 @@ def run_ledger_fuse(args: Any) -> dict:
 
     ledger_root = Path(getattr(args, "ledger_root", "outputs/ledger"))
     runs_root = Path(getattr(args, "runs_root", "outputs/runs"))
+    allow_eq_w = getattr(args, "allow_equal_weight_fallback", False)
 
     logger.info(f"=== ledger_fuse: {target_date} ===")
 
@@ -65,6 +57,7 @@ def run_ledger_fuse(args: Any) -> dict:
                 target_date=target_date,
                 ledger_root=ledger_root,
                 runs_root=runs_root,
+                allow_equal_weight_fallback=allow_eq_w,
             )
             manifest["results"][task] = task_result
 
@@ -97,6 +90,7 @@ def _fuse_for_task(
     target_date: str,
     ledger_root: Path,
     runs_root: Path,
+    allow_equal_weight_fallback: bool = False,
 ) -> dict:
     """Fuse predictions for a single task."""
     result = {"task": task, "status": "running"}
@@ -129,12 +123,14 @@ def _fuse_for_task(
         f"{len(weights)} weight entries"
     )
 
-    # Apply weights
+    # Apply weights (strict mode)
     fused_df, debug_df = apply_daily_ledger_weights(
         predictions_long=predictions_long,
         weights=weights,
         target_day=target_date,
         task=task,
+        allow_equal_weight_fallback=allow_equal_weight_fallback,
+        strict=True,
     )
 
     # Save

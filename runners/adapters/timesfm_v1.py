@@ -31,10 +31,15 @@ class TimesFMV1Adapter:
 
     This is the canonical TimesFM wrapper for the ledger pipeline.
     No other wrapper should call TimesFM directly.
+
+    Mode "exact": faithful v1 behavior, no data truncation.
+    Mode "cutoff_safe": truncates data to enforce cutoff safety
+                        (only enabled when explicitly requested).
     """
 
-    def __init__(self, epf_root: str):
+    def __init__(self, epf_root: str, mode: str = "exact"):
         self.epf_root = Path(epf_root)
+        self.mode = mode
         if not self.epf_root.exists():
             raise FileNotFoundError(
                 f"EPF v1 root not found: {self.epf_root}. "
@@ -84,14 +89,18 @@ class TimesFMV1Adapter:
             data_path = self._find_data_file()
 
         logger.info(
-            f"TimesFM v1: predicting {target_date} ({target}), "
+            f"TimesFM v1 [{self.mode}]: predicting {target_date} ({target}), "
             f"cutoff={cutoff_date}"
         )
 
-        # Enforce cutoff safety: if data_path contains data beyond cutoff,
-        # create a temporary truncated copy
-        safe_data_path = self._ensure_cutoff_safe_data(
-            data_path, cutoff_date, target_date
+        # Enforce cutoff safety: only when mode=cutoff_safe
+        if self.mode == "cutoff_safe":
+            safe_data_path = self._ensure_cutoff_safe_data(
+                data_path, cutoff_date, target_date
+            )
+        else:
+            # exact mode: pass data as-is, faithful to v1 behavior
+            safe_data_path = data_path
         )
 
         try:
