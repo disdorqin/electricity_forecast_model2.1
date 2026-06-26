@@ -82,6 +82,16 @@ def run_ledger_predict(args: Any) -> dict:
     force = getattr(args, "force", False)
     rt_cutoff_hour = getattr(args, "realtime_cutoff_hour", 14)
 
+    # Read model tuning parameters from args
+    training_months = getattr(args, "training_months", 12)
+    val_ratio = getattr(args, "val_ratio", 0.2)
+    timemixer_epochs = getattr(args, "timemixer_epochs", 80)
+    timemixer_patience = getattr(args, "timemixer_patience", 15)
+    timemixer_batch_size = getattr(args, "timemixer_batch_size", 16)
+    timemixer_full_refit = getattr(args, "timemixer_full_refit", True)
+    timemixer_seeds = getattr(args, "timemixer_seeds", 42)
+    realtime_cutoff_hour = getattr(args, "realtime_cutoff_hour", 14)
+
     # Validate EPF v1 root is present for LightGBM/TimesFM
     if not epf_root or not Path(epf_root).exists():
         if allow_v2_fb:
@@ -125,6 +135,33 @@ def run_ledger_predict(args: Any) -> dict:
     manifest["data_cutoff_dayahead"] = da_cutoff_date
     manifest["data_cutoff_realtime"] = rt_cutoff_date
 
+    # Add model_runtime_config to manifest
+    manifest["model_runtime_config"] = {
+        "timemixer": {
+            "cutoff_hour_rt": rt_cutoff_hour,
+            "epochs": timemixer_epochs,
+            "patience": timemixer_patience,
+            "batch_size": timemixer_batch_size,
+            "full_refit": timemixer_full_refit,
+            "seed": timemixer_seeds,
+        },
+        "rt916": {
+            "asof_hour": rt_cutoff_hour,
+            "amp_inference": False,
+            "export_dtype": "fp32",
+        },
+        "sgdfnet": {
+            "decision_hour": rt_cutoff_hour,
+        },
+        "timesfm": {
+            "device": "cpu",
+            "epf_v1_mode": epf_v1_mode,
+        },
+        "lightgbm": {
+            "epf_v1_mode": epf_v1_mode,
+        },
+    }
+
     try:
         # --- Dayahead predictions (must run BEFORE realtime) ---
         logger.info("\n>>> Dayahead models starting...")
@@ -138,6 +175,13 @@ def run_ledger_predict(args: Any) -> dict:
             epf_v1_mode=epf_v1_mode,
             cutoff_date=da_cutoff_date,
             realtime_cutoff_hour=rt_cutoff_hour,
+            training_months=training_months,
+            val_ratio=val_ratio,
+            timemixer_epochs=timemixer_epochs,
+            timemixer_patience=timemixer_patience,
+            timemixer_batch_size=timemixer_batch_size,
+            timemixer_full_refit=timemixer_full_refit,
+            timemixer_seeds=timemixer_seeds,
             run_dir=run_dir,
             max_cpu=max_cpu,
             max_gpu=max_gpu,
@@ -160,6 +204,13 @@ def run_ledger_predict(args: Any) -> dict:
             epf_v1_mode=epf_v1_mode,
             cutoff_date=rt_cutoff_date,
             realtime_cutoff_hour=rt_cutoff_hour,
+            training_months=training_months,
+            val_ratio=val_ratio,
+            timemixer_epochs=timemixer_epochs,
+            timemixer_patience=timemixer_patience,
+            timemixer_batch_size=timemixer_batch_size,
+            timemixer_full_refit=timemixer_full_refit,
+            timemixer_seeds=timemixer_seeds,
             run_dir=run_dir,
             max_cpu=max_cpu,
             max_gpu=max_gpu,
@@ -209,10 +260,17 @@ def _run_model_set(
     epf_v1_mode: str,
     cutoff_date: str,
     realtime_cutoff_hour: int,
-    run_dir: Path,
-    max_cpu: int,
-    max_gpu: int,
-    force: bool,
+    training_months: int = 12,
+    val_ratio: float = 0.2,
+    timemixer_epochs: int = 80,
+    timemixer_patience: int = 15,
+    timemixer_batch_size: int = 16,
+    timemixer_full_refit: bool = True,
+    timemixer_seeds: int = 42,
+    run_dir: Path = None,
+    max_cpu: int = 2,
+    max_gpu: int = 1,
+    force: bool = False,
 ) -> dict:
     """Run all models for a given task (dayahead or realtime)."""
     results = {}
@@ -243,7 +301,7 @@ def _run_model_set(
             except Exception:
                 logger.warning(f"Cache read failed, re-running {model_name}")
 
-        # Create task
+        # Create task — pass ALL model params through kwargs
         task_spec = ScheduleTask(
             model_name=model_name,
             task_name=task,
@@ -259,6 +317,13 @@ def _run_model_set(
                 "epf_v1_mode": epf_v1_mode,
                 "cutoff_date": cutoff_date,
                 "realtime_cutoff_hour": realtime_cutoff_hour,
+                "training_months": training_months,
+                "val_ratio": val_ratio,
+                "timemixer_epochs": timemixer_epochs,
+                "timemixer_patience": timemixer_patience,
+                "timemixer_batch_size": timemixer_batch_size,
+                "timemixer_full_refit": timemixer_full_refit,
+                "timemixer_seeds": timemixer_seeds,
                 "output_path": str(output_path),
             },
         )
@@ -302,13 +367,18 @@ def _predict_model(
     epf_v1_mode: str,
     cutoff_date: str,
     realtime_cutoff_hour: int,
-    output_path: str,
+    training_months: int = 12,
+    val_ratio: float = 0.2,
+    timemixer_epochs: int = 80,
+    timemixer_patience: int = 15,
+    timemixer_batch_size: int = 16,
+    timemixer_full_refit: bool = True,
+    timemixer_seeds: int = 42,
+    output_path: str = "",
 ) -> pd.DataFrame:
     """
     Run a single model prediction and save to CSV.
     Fails fast if validation errors are detected.
-
-    Returns the standardized DataFrame.
     """
     logger.info(f"Predicting: {model_name}/{task} on {target_date}")
 
@@ -317,11 +387,21 @@ def _predict_model(
     elif model_name == "timesfm":
         df = _predict_timesfm(task, target_date, data_path, epf_root, allow_v2_fallback, epf_v1_mode, cutoff_date)
     elif model_name == "timemixer":
-        df = _predict_timemixer(task, target_date, data_path, cutoff_date, realtime_cutoff_hour)
+        df = _predict_timemixer(
+            task, target_date, data_path, cutoff_date,
+            realtime_cutoff_hour, training_months, val_ratio,
+            timemixer_epochs, timemixer_patience, timemixer_batch_size,
+            timemixer_full_refit, timemixer_seeds,
+        )
     elif model_name == "sgdfnet":
-        df = _predict_sgdfnet(task, target_date, data_path, cutoff_date, realtime_cutoff_hour)
+        df = _predict_sgdfnet(
+            task, target_date, data_path, cutoff_date, realtime_cutoff_hour
+        )
     elif model_name == "rt916":
-        df = _predict_rt916(task, target_date, data_path, cutoff_date, realtime_cutoff_hour)
+        df = _predict_rt916(
+            task, target_date, data_path, cutoff_date,
+            realtime_cutoff_hour, training_months,
+        )
     else:
         raise ValueError(f"Unknown model: {model_name}")
 
@@ -413,11 +493,25 @@ def _predict_timemixer(
     data_path: str,
     cutoff_date: str,
     realtime_cutoff_hour: int = 14,
+    training_months: int = 12,
+    val_ratio: float = 0.2,
+    timemixer_epochs: int = 80,
+    timemixer_patience: int = 15,
+    timemixer_batch_size: int = 16,
+    timemixer_full_refit: bool = True,
+    timemixer_seeds: int = 42,
 ) -> pd.DataFrame:
     """TimeMixer prediction using 2.0 model (GPU preferred)."""
     return _predict_via_registry(
         "timemixer", task, target_date, data_path, cutoff_date,
         realtime_cutoff_hour=realtime_cutoff_hour,
+        training_months=training_months,
+        val_ratio=val_ratio,
+        timemixer_epochs=timemixer_epochs,
+        timemixer_patience=timemixer_patience,
+        timemixer_batch_size=timemixer_batch_size,
+        timemixer_full_refit=timemixer_full_refit,
+        timemixer_seeds=timemixer_seeds,
     )
 
 
@@ -441,11 +535,13 @@ def _predict_rt916(
     data_path: str,
     cutoff_date: str,
     realtime_cutoff_hour: int = 14,
+    training_months: int = 12,
 ) -> pd.DataFrame:
     """RT916 prediction using 2.0 model (GPU)."""
     return _predict_via_registry(
         "rt916", task, target_date, data_path, cutoff_date,
         realtime_cutoff_hour=realtime_cutoff_hour,
+        training_months=training_months,
     )
 
 
@@ -456,9 +552,19 @@ def _predict_via_registry(
     data_path: str,
     cutoff_date: str,
     realtime_cutoff_hour: int = 14,
+    training_months: int = 12,
+    val_ratio: float = 0.2,
+    timemixer_epochs: int = 80,
+    timemixer_patience: int = 15,
+    timemixer_batch_size: int = 16,
+    timemixer_full_refit: bool = True,
+    timemixer_seeds: int = 42,
 ) -> pd.DataFrame:
     """
     Run prediction via the existing 2.0 model registry.
+
+    ALL model tuning parameters are forwarded to pipeline.predict_range()
+    so that realtime_cutoff_hour, timemixer-* etc. actually reach the model.
     """
     from runners.registry import get_model_pipeline
 
@@ -470,6 +576,16 @@ def _predict_via_registry(
         predict_date=target_date,
         start=target_date,
         end=target_date,
+        # Forward ALL tuning parameters
+        realtime_cutoff_hour=realtime_cutoff_hour,
+        cutoff_date=cutoff_date,
+        training_months=training_months,
+        val_ratio=val_ratio,
+        timemixer_epochs=timemixer_epochs,
+        timemixer_patience=timemixer_patience,
+        timemixer_batch_size=timemixer_batch_size,
+        timemixer_full_refit=timemixer_full_refit,
+        timemixer_seeds=timemixer_seeds,
     )
 
     if result is None or result.frame is None:

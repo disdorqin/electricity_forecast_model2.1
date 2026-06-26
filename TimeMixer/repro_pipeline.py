@@ -63,8 +63,9 @@ class RunConfig:
     seed: int = 42
     device: str = "auto"
     cutoff_hour_da: int = 15
-    cutoff_hour_rt: int = 15
+    cutoff_hour_rt: int = 14
     segment_training: bool = True
+    full_refit: bool = True  # CLI exists, implementation pending
     target_mode: str = "direct"
     da_target_mode: str | None = None
     rt_target_mode: str | None = None
@@ -1668,12 +1669,12 @@ def audit_protocol(cfg: RunConfig, df: pd.DataFrame) -> list[dict[str, Any]]:
                 "detail": f"当前日前 cutoff={cfg.cutoff_hour_da}，不是推荐的 D-1 15:00。",
             }
         )
-    if cfg.cutoff_hour_rt != 15:
+    if cfg.cutoff_hour_rt != 14:
         findings.append(
             {
                 "severity": "warning",
                 "item": "realtime_cutoff",
-                "detail": f"当前实时 cutoff={cfg.cutoff_hour_rt}，不是推荐的 D-1 15:00。",
+                "detail": f"当前实时 cutoff={cfg.cutoff_hour_rt}，不是推荐的 D-1 14:00（2.1 default）。",
             }
         )
     if df["ds"].duplicated().any():

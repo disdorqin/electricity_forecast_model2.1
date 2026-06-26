@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import tempfile
 from pathlib import Path
 import sys
@@ -8,6 +9,8 @@ import pandas as pd
 import yaml
 
 from pipelines.base import BaseModelPipeline, PredictionResult
+
+logger = logging.getLogger(__name__)
 from utils.io import ensure_prediction_frame, ensure_runtime_dirs
 
 
@@ -48,11 +51,15 @@ class ModelPipeline(BaseModelPipeline):
         # so predictions cover [start_day .. end_day] inclusive.
         end_day = end
 
+        decision_hour = int(kwargs.get("realtime_cutoff_hour", 14))
+        logger.info(f"SGDFNet decision_hour={decision_hour}")
+
         tmp_config = self._build_temp_config(
             data_path=data_path,
             start_day=start,
             end_day=end_day,
             output_root=str(output_root / "sgdfnet_runs"),
+            decision_hour=decision_hour,
         )
 
         run_dir = Path(run_protocol_b_cutoff_experiment(tmp_config))
@@ -110,17 +117,19 @@ class ModelPipeline(BaseModelPipeline):
         start_day: str,
         end_day: str,
         output_root: str,
+        decision_hour: int = 14,
     ) -> Path:
         """Create a temporary YAML config overriding key fields from the base config."""
         with open(self.config_path, "r", encoding="utf-8") as f:
             base_cfg = yaml.safe_load(f)
 
-        # Override paths and date range
+        # Override paths, date range, and cutoff
         if data_path:
             base_cfg["data_path"] = str(data_path)
         base_cfg["start_day"] = start_day
         base_cfg["end_day"] = end_day
         base_cfg["output_root"] = output_root
+        base_cfg["decision_hour"] = int(decision_hour)
 
         # Write to temp file
         tmp_dir = Path(tempfile.gettempdir()) / "sgdfnet_staged_configs"

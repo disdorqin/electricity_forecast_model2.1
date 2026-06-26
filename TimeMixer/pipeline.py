@@ -53,6 +53,11 @@ class ModelPipeline(BaseModelPipeline):
             append_leaderboard=False,
             train_months=int(kwargs.get("training_months", 12)),
             val_ratio=float(kwargs.get("val_ratio", 0.2)),
+            cutoff_hour_rt=int(kwargs.get("realtime_cutoff_hour", 14)),
+            epochs=int(kwargs.get("timemixer_epochs", 80)),
+            patience=int(kwargs.get("timemixer_patience", 15)),
+            batch_size=int(kwargs.get("timemixer_batch_size", 16)),
+            seed=int(kwargs.get("timemixer_seeds", 42)),
         )
         result = run_monthly_reproduction(run_cfg)
         raw = pd.read_csv(Path(result["output_dir"]) / "predictions_raw.csv", encoding="utf-8-sig")

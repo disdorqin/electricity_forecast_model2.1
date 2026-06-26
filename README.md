@@ -20,6 +20,8 @@
 
 - **LightGBM / TimesFM**：完全复刻 EPF v1.0 最佳实现，通过 `runners/adapters/` 统一 adapter 调用。
 - **TimeMixer / RT916 / SGDFNet**：保留内部 early stopping 和 calibration split，这些是模型内部优化，不是给融合学习器的 validation tap。
+- **TimeMixer full_refit**：CLI 参数 `--timemixer-full-refit` 存在且默认开启，但实际 full refit 逻辑尚未在模型代码中实现（train+valid 全量重训后预测）。当前 RunConfig 已包含 `full_refit` 字段。
+- **Realtime cutoff**：所有 realtime 模型通过 `--realtime-cutoff-hour 14` 统一控制，不再硬编码 15。
 
 ---
 

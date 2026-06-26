@@ -48,19 +48,26 @@ class ModelPipeline(BaseModelPipeline):
         if _dp:
             core.RAW_DF_PATH = os.path.abspath(_dp)
         start_end = self._resolve_start_end(kwargs)
+
+        # Read cutoff hour from kwargs (default 14 for realtime, 24 for dayahead)
+        asof_hour = int(kwargs.get("realtime_cutoff_hour", 14))
+        if target == "dayahead":
+            # Dayahead uses full D-1 data; pass 24 to indicate end-of-day
+            asof_hour = 24
+
         if target == "realtime":
             # RT916 realtime must first produce DA predictions, then inject them into RT.
             result = core.run_joint_da_rt_daily_backtest(
                 start_end_list=start_end,
                 mod="all",
-                asof_hour=15,
+                asof_hour=asof_hour,
             )
         else:
             result = core.run_daily_asof_backtest(
                 target=TARGET_MAP[target],
                 start_end_list=start_end,
                 mod="all",
-                asof_hour=15,
+                asof_hour=asof_hour,
                 retrain_daily=False,
             )
         prediction_col = "预测日前电价" if target == "dayahead" else "预测实时电价"
