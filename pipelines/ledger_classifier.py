@@ -204,11 +204,20 @@ def _run_extreme_price_classifier(
                     result["n_corrections"] = corrections
             else:
                 result["error"] = "Bridge completed but no corrected file produced"
+                # Fall back — ensure corrected file always exists
+                result = _fallback_classifier(fused_df, target_date)
+                result["original_error"] = result.get("error", "")
+                result["fallback_used"] = True
         elif clf_result is not None and clf_result.get("status") == "skipped":
-            result["error"] = clf_result.get("reason", "Classifier data doesn't cover date range")
+            logger.warning(f"Classifier bridge skipped: {clf_result.get('reason')}")
+            # Bridge skipped — run fallback to ensure corrected file exists
+            result = _fallback_classifier(fused_df, target_date)
+            result["original_error"] = clf_result.get("reason", "Bridge skipped")
             result["fallback_used"] = True
         else:
-            result["error"] = f"Bridge returned: {clf_result}"
+            logger.warning(f"Classifier bridge returned unexpected: {clf_result}")
+            result = _fallback_classifier(fused_df, target_date)
+            result["original_error"] = f"Bridge returned: {clf_result}"
             result["fallback_used"] = True
 
     except ImportError:

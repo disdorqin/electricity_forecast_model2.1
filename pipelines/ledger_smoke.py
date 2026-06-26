@@ -41,14 +41,10 @@ def run_ledger_smoke(args: Any) -> dict:
 
     logger.info(f"=== ledger_smoke: {target_date} ===")
 
-    # Build smoke-optimized args
+    # Build smoke-optimized args — force separate output dirs
     smoke_args = copy.copy(args)
-    smoke_args.ledger_root = str(getattr(args, "ledger_root", "outputs/ledger")).replace(
-        "outputs/ledger", "outputs/smoke/ledger"
-    )
-    smoke_args.runs_root = str(getattr(args, "runs_root", "outputs/runs")).replace(
-        "outputs/runs", "outputs/smoke/runs"
-    )
+    smoke_args.ledger_root = "outputs/smoke/ledger"
+    smoke_args.runs_root = "outputs/smoke/runs"
     smoke_args.force = True
     smoke_args.allow_missing_models = False
 
