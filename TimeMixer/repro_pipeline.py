@@ -243,7 +243,7 @@ def compute_blend_baseline(
     target_col: str,
     blend_spec: tuple[tuple[int, float], ...] = ((1, 0.60), (7, 0.25), (14, 0.15)),
 ) -> np.ndarray:
-    cur = df[(df["ds"] >= target_day) & (df["ds"] < target_day + pd.Timedelta(days=1))].copy()
+    cur = df[(df["ds"] > target_day) & (df["ds"] <= target_day + pd.Timedelta(days=1))].copy()
     if len(cur) != 24:
         raise ValueError(f"{target_day.date()} 不足 24 小时")
     weighted_sum = np.zeros(24, dtype=float)
@@ -332,7 +332,7 @@ def make_future_features(
     da_values: np.ndarray | None = None,
     baseline_values: np.ndarray | None = None,
 ) -> np.ndarray:
-    cur = df[(df["ds"] >= target_day) & (df["ds"] < target_day + pd.Timedelta(days=1))].copy()
+    cur = df[(df["ds"] > target_day) & (df["ds"] <= target_day + pd.Timedelta(days=1))].copy()
     if len(cur) != 24:
         raise ValueError(f"{target_day.date()} 不足 24 小时")
     load = cur["load"].replace(0, np.nan).to_numpy(float)
@@ -398,7 +398,7 @@ def make_sample(
         # 上游调用者（test 阶段）通常丢弃该返回值，因此不影响预测结果。
         y_model = np.zeros(24, dtype=float)
         return past, future, y_model, baseline
-    cur = df[(df["ds"] >= target_day) & (df["ds"] < target_day + pd.Timedelta(days=1))]
+    cur = df[(df["ds"] > target_day) & (df["ds"] <= target_day + pd.Timedelta(days=1))]
     y = cur[target_col].to_numpy(float)
     if len(y) != 24 or np.isnan(y).any():
         raise ValueError("目标日标签无效")
@@ -436,7 +436,7 @@ def build_arrays(
         try:
             da_vals = None
             if target_col == "realtime_price":
-                cur = df[(df["ds"] >= day) & (df["ds"] < day + pd.Timedelta(days=1))].copy()
+                cur = df[(df["ds"] > day) & (df["ds"] <= day + pd.Timedelta(days=1))].copy()
                 if pred_da_map is None:
                     da_vals = cur["day_ahead_clearing_price"].to_numpy(float)
                 else:
@@ -492,7 +492,7 @@ def build_segment_arrays(
         try:
             da_vals = None
             if target_col == "realtime_price":
-                cur = df[(df["ds"] >= day) & (df["ds"] < day + pd.Timedelta(days=1))].copy()
+                cur = df[(df["ds"] > day) & (df["ds"] <= day + pd.Timedelta(days=1))].copy()
                 if pred_da_map is None:
                     da_vals = cur["day_ahead_clearing_price"].to_numpy(float)
                 else:
@@ -1602,7 +1602,7 @@ def make_prediction_rows(
     rows = []
     target_col = "day_ahead_clearing_price" if task == "da" else "realtime_price"
     for target_day, pred in zip(test_days, preds):
-        cur = df[(df["ds"] >= target_day) & (df["ds"] < target_day + pd.Timedelta(days=1))].copy()
+        cur = df[(df["ds"] > target_day) & (df["ds"] <= target_day + pd.Timedelta(days=1))].copy()
         cutoff = compute_cutoff(target_day, cutoff_hour)
         cur["task"] = task
         cur["target_day"] = target_day.date().isoformat()

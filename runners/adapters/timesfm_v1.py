@@ -101,7 +101,6 @@ class TimesFMV1Adapter:
         else:
             # exact mode: pass data as-is, faithful to v1 behavior
             safe_data_path = data_path
-        )
 
         try:
             from TF.infer import predict_price_for_date
