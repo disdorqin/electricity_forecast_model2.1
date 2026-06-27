@@ -84,9 +84,9 @@ def main() -> int:
     print("  local_paths:")
     project_root = Path(__file__).resolve().parent.parent
 
-    tf_dir = project_root / "TF"
+    tf_dir = project_root / "TimesFMBackend"
     tf_ok = tf_dir.is_dir()
-    print(f"    TF/: {'OK' if tf_ok else 'MISSING'}")
+    print(f"    TimesFMBackend/: {'OK' if tf_ok else 'MISSING'}")
 
     data_file = project_root / "data" / "shandong_pmos_hourly.xlsx"
     data_ok = data_file.is_file()

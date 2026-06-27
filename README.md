@@ -4,7 +4,7 @@
 
 本仓库在 2.0 基础上新增 **ledger 生产链路**：每天只做真实预测，连续积累 30 天预测账本（prediction ledger）和实际值账本（actual ledger），从第 31 天开始用前 30 天真实预测+实际值学习动态融合权重（Daily Ledger GEF），再融合当天预测并进入负电价分类器。
 
-**旧 2.0 staged pipeline（model_stage / learner_stage / fuse_stage / classifier_stage / full）完整保留为 baseline。**
+**旧 2.0 staged pipeline** 已归档到 `_archive/legacy_staged_pipeline/`。旧 TimesFM wrapper 已归档到 `_archive/legacy_timesfm_wrapper/`。使用 `ledger_*` 系列 pipeline 作为正式入口。
 
 ---
 
@@ -38,7 +38,7 @@ ledger_backfill  →  ledger_predict  →  ledger_weight  →  ledger_fuse  → 
 
 - **LightGBM / TimesFM**：通过 `runners/adapters/` 调用 EPF v1.0 实现。
 - **TimeMixer / RT916 / SGDFNet**：保留内部 early stopping 和 calibration split。
-- **TimesFM 在 ledger pipeline 中的入口**：`runners/adapters/timesfm_v1.py` → `TF.infer.predict_price_for_date()` → `TF.price_forecast_copy_分时段预测.forecast_next_day()`。
+- **TimesFM 在 ledger pipeline 中的入口**：`runners/adapters/timesfm_v1.py` → `TimesFMBackend.infer.predict_price_for_date()` → `TimesFMBackend.price_forecast_copy_分时段预测.forecast_next_day()`。
 - **Realtime cutoff**：所有 realtime 模型通过 `--realtime-cutoff-hour 14` 统一控制，D-1 14:00 截止。
 
 ---
@@ -56,7 +56,7 @@ fusion/               融合核心：
   - classifier_bridge.py          → 负电价分类器
   - adapters/                     → 各模型 adapter
 lightGBM/             LightGBM 模型实现
-TF/                   TimesFM 后端（EPF v1 实现；注意：不是 TensorFlow）
+TimesFMBackend/          TimesFM 后端（EPF v1 实现；注意：不是 TensorFlow）
 TimeMixer/            TimeMixer 模型实现
 RT916_SpikeFusionNet/ RT916 模型实现
 SGDFNet/              SGDFNet 模型实现
@@ -333,7 +333,7 @@ A: GPU queue 默认串行（max_gpu_workers=1）。如果仍有 OOM，减小 bat
 A: 直接运行 `ledger_fuse`，它会读取已有的 prediction 和 weight 文件。
 
 **Q: `TF/` 是 TensorFlow 吗？**
-A: 不是。`TF/` 是当前 ledger pipeline 使用的 TimesFM 实现后端（EPF v1.0），包含完整 timesfm_2p5 PyTorch+Flax 代码。
+A: 不是。`TimesFMBackend/` 是当前 ledger pipeline 使用的 TimesFM 实现后端（EPF v1.0），包含完整 timesfm_2p5 PyTorch+Flax 代码。`TimesFMBackend/` 不是 TensorFlow。
 
 ---
 

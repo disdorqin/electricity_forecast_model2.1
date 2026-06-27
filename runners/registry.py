@@ -8,15 +8,14 @@ from lightGBM.pipeline import ModelPipeline as LightGBMPipeline
 from RT916_SpikeFusionNet.pipeline import ModelPipeline as RT916Pipeline
 from SGDFNet.pipeline import ModelPipeline as SGDFNetPipeline
 from TimeMixer.pipeline import ModelPipeline as TimeMixerPipeline
-from TimesFM.pipeline import ModelPipeline as TimesFMPipeline
-
 
 PIPELINE_REGISTRY: dict[str, Callable[[], BaseModelPipeline]] = {
     "lightgbm": LightGBMPipeline,
     "sgdfnet": SGDFNetPipeline,
     "rt916": RT916Pipeline,
     "timemixer": TimeMixerPipeline,
-    "timesfm": TimesFMPipeline,
+    # Note: "timesfm" removed — ledger pipeline uses runners/adapters/timesfm_v1.py (TimesFMBackend) directly.
+    # The old TimesFM.pipeline (staged_pipeline) has been archived in _archive/legacy_timesfm_wrapper/.
 }
 
 

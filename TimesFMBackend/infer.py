@@ -4,7 +4,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 
 
-from TF.price_forecast_copy_分时段预测 import forecast_next_day, set_reproducibility
+from TimesFMBackend.price_forecast_copy_分时段预测 import forecast_next_day, set_reproducibility
 
 
 def predict_price_for_date(
