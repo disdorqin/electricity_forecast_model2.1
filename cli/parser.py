@@ -38,7 +38,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--force", action="store_true", default=False, help="Force rerun even if cached outputs exist")
 
     # Ledger pipeline parameters
-    parser.add_argument("--epf-v1-root", default=None, help="[REQUIRED for ledger] Path to EPF v1.0 repository root for LightGBM/TimesFM adapters")
+    parser.add_argument("--epf-v1-root", default=None, help="[Optional legacy compatibility] External EPF v1.0 root. Not required for normal ledger_full runs; local lightGBM/ and TimesFMBackend/ are used by default.")
     parser.add_argument("--epf-v1-mode", default="exact", choices=["exact", "cutoff_safe"], help="EPF v1.0 adapter mode")
     parser.add_argument("--allow-v2-fallback", action="store_true", default=False, help="Allow LightGBM/TimesFM to fall back to 2.0")
     parser.add_argument("--allow-missing-models", action="store_true", default=False, help="Continue even if some models fail")

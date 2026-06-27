@@ -27,7 +27,10 @@ logger = logging.getLogger(__name__)
 
 
 class TimesFMV1Adapter:
-    """Adapter for EPF v1.0 TimesFM predictions.
+    """Adapter for TimesFM predictions.
+
+    Uses the bundled TimesFMBackend/ implementation by default.
+    Optionally supports external EPF v1.0 root for legacy compatibility.
 
     This is the canonical TimesFM wrapper for the ledger pipeline.
     No other wrapper should call TimesFM directly.
@@ -37,15 +40,14 @@ class TimesFMV1Adapter:
                         (only enabled when explicitly requested).
     """
 
-    def __init__(self, epf_root: str, mode: str = "exact"):
-        self.epf_root = Path(epf_root)
+    def __init__(self, epf_root: str | None = None, mode: str = "exact"):
+        self.epf_root = Path(epf_root) if epf_root else None
         self.mode = mode
-        if not self.epf_root.exists():
-            raise FileNotFoundError(
-                f"EPF v1 root not found: {self.epf_root}. "
-                f"Please provide --epf-v1-root."
-            )
-        self._ensure_epf_on_path()
+        if self.epf_root and self.epf_root.exists():
+            self._ensure_epf_on_path()
+        elif self.epf_root:
+            logger.warning("Ignoring missing legacy EPF root: %s", self.epf_root)
+            self.epf_root = None
 
     def _ensure_epf_on_path(self):
         """Add EPF v1.0 root to sys.path for imports."""
@@ -211,14 +213,19 @@ class TimesFMV1Adapter:
         return safe_path
 
     def _find_data_file(self) -> str:
-        """Auto-locate data file in EPF v1.0 repo."""
+        """Auto-locate data file: local data/ first, then EPF v1.0 repo."""
         candidates = [
-            self.epf_root / "data" / "shandong_pmos_hourly.xlsx",
-            self.epf_root / "data" / "shandong_pmos_hourly.csv",
+            Path("data/shandong_pmos_hourly.xlsx"),
+            Path("data/shandong_pmos_hourly.csv"),
         ]
+        if self.epf_root:
+            candidates.extend([
+                self.epf_root / "data" / "shandong_pmos_hourly.xlsx",
+                self.epf_root / "data" / "shandong_pmos_hourly.csv",
+            ])
         for c in candidates:
             if c.exists():
                 return str(c)
         raise FileNotFoundError(
-            f"No data file found in {self.epf_root / 'data'}"
+            f"No data file found. Checked: {[str(c) for c in candidates]}"
         )

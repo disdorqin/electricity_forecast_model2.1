@@ -28,21 +28,23 @@ logger = logging.getLogger(__name__)
 
 
 class LightGBMV1Adapter:
-    """Adapter for EPF v1.0 LightGBM predictions.
+    """Adapter for LightGBM predictions.
+
+    Uses the bundled lightGBM/ implementation by default.
+    Optionally supports external EPF v1.0 root for legacy compatibility.
 
     Mode "exact": faithful v1 behavior, no modifications.
     Mode "cutoff_safe": truncates data to enforce cutoff safety.
     """
 
-    def __init__(self, epf_root: str, mode: str = "exact"):
-        self.epf_root = Path(epf_root)
+    def __init__(self, epf_root: str | None = None, mode: str = "exact"):
+        self.epf_root = Path(epf_root) if epf_root else None
         self.mode = mode
-        if not self.epf_root.exists():
-            raise FileNotFoundError(
-                f"EPF v1 root not found: {self.epf_root}. "
-                f"Please provide --epf-v1-root."
-            )
-        self._ensure_epf_on_path()
+        if self.epf_root and self.epf_root.exists():
+            self._ensure_epf_on_path()
+        elif self.epf_root:
+            logger.warning("Ignoring missing legacy EPF root: %s", self.epf_root)
+            self.epf_root = None
 
     def _ensure_epf_on_path(self):
         """Add EPF v1.0 root to sys.path for imports."""
@@ -151,14 +153,19 @@ class LightGBMV1Adapter:
         return df
 
     def _find_data_file(self) -> str:
-        """Auto-locate data file in EPF v1.0 repo."""
+        """Auto-locate data file: local data/ first, then EPF v1.0 repo."""
         candidates = [
-            self.epf_root / "data" / "shandong_pmos_hourly.xlsx",
-            self.epf_root / "data" / "shandong_pmos_hourly.csv",
+            Path("data/shandong_pmos_hourly.xlsx"),
+            Path("data/shandong_pmos_hourly.csv"),
         ]
+        if self.epf_root:
+            candidates.extend([
+                self.epf_root / "data" / "shandong_pmos_hourly.xlsx",
+                self.epf_root / "data" / "shandong_pmos_hourly.csv",
+            ])
         for c in candidates:
             if c.exists():
                 return str(c)
         raise FileNotFoundError(
-            f"No data file found in {self.epf_root / 'data'}"
+            f"No data file found. Checked: {[str(c) for c in candidates]}"
         )

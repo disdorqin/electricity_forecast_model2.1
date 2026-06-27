@@ -3,9 +3,12 @@
 ## Prerequisites
 
 - Conda environment `epf-2` with dependencies installed (`pip install -r requirements.txt`)
-- EPF v1.0 repository path for LightGBM/TimesFM adapters (`--epf-v1-root`)
 - Input data file at `data/shandong_pmos_hourly.xlsx`
 - CUDA-capable GPU for TimeMixer and RT916 models
+
+> **Self-contained:** LightGBM and TimesFMBackend are bundled in this repository.
+> No external EPF v1.0 repository is required. The `--epf-v1-root` option is
+> retained only for legacy compatibility.
 
 ## 1. Environment Check
 
@@ -30,7 +33,6 @@ Run a minimal end-to-end test with reduced training scope:
 ```powershell
 conda run -n epf-2 python main.py --pipeline ledger_smoke --date 2026-02-24 ^
     --data-path data/shandong_pmos_hourly.xlsx ^
-    --epf-v1-root "path\to\epf-v1" ^
     --smoke-training-months 3 --smoke-timemixer-epochs 3 --smoke-timemixer-patience 1 ^
     --max-cpu-workers 2 --max-gpu-workers 1 ^
     --seed 42 --deterministic --force
@@ -46,7 +48,6 @@ Populate the prediction ledger with historical data:
 conda run -n epf-2 python main.py --pipeline ledger_backfill ^
     --start YYYY-MM-DD --end YYYY-MM-DD ^
     --data-path data/shandong_pmos_hourly.xlsx ^
-    --epf-v1-root "path\to\epf-v1" ^
     --max-cpu-workers 2 --max-gpu-workers 1 ^
     --seed 42 --deterministic
 ```
@@ -65,7 +66,6 @@ Run all 5 stages for a target date:
 conda run -n epf-2 python main.py --pipeline ledger_full ^
     --date YYYY-MM-DD ^
     --data-path data/shandong_pmos_hourly.xlsx ^
-    --epf-v1-root "path\to\epf-v1" ^
     --max-cpu-workers 2 --max-gpu-workers 1 ^
     --seed 42 --deterministic
 ```
@@ -120,8 +120,7 @@ Run individual stages if rerunning from scratch:
 
 ```powershell
 # Stage 1: Predict
-conda run -n epf-2 python main.py --pipeline ledger_predict --date YYYY-MM-DD ^
-    --epf-v1-root "path\to\epf-v1"
+conda run -n epf-2 python main.py --pipeline ledger_predict --date YYYY-MM-DD
 
 # Stage 2: Weight learning
 conda run -n epf-2 python main.py --pipeline ledger_weight --date YYYY-MM-DD
@@ -139,7 +138,7 @@ To force a full rerun (bypass prediction cache):
 
 ```powershell
 conda run -n epf-2 python main.py --pipeline ledger_full --date YYYY-MM-DD ^
-    --epf-v1-root "path\to\epf-v1" --force
+    --data-path data/shandong_pmos_hourly.xlsx --force
 ```
 
 To force a specific stage, add `--force` after the cleaned outputs.
@@ -150,7 +149,7 @@ To force a specific stage, add `--force` after the cleaned outputs.
 |-----------|---------|-------------|
 | `--date` | — | Target date YYYY-MM-DD |
 | `--start` / `--end` | — | Date range for backfill |
-| `--epf-v1-root` | None | EPF v1.0 repo path for LightGBM/TimesFM |
+| `--epf-v1-root` | None | [Optional legacy compatibility] External EPF v1.0 root |
 | `--seed` | 42 | Global random seed |
 | `--deterministic` | False | Enable deterministic algorithms |
 | `--max-cpu-workers` | 2 | CPU parallel workers |
@@ -170,8 +169,8 @@ python scripts/env_check.py
 # Verify final pipeline outputs
 python scripts/verify_final_pipeline.py --date 2026-02-24 --runs-root outputs/runs
 
-# Reproducibility (needs EPF v1 root)
-python scripts/check_reproducibility.py 2026-02-24 --seed 42 --deterministic --epf-v1-root "path"
+# Reproducibility
+python scripts/check_reproducibility.py 2026-02-24 --seed 42 --deterministic
 
 # TimeMixer alignment
 python scripts/check_timemixer_alignment.py --date 2026-02-24

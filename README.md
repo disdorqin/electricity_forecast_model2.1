@@ -125,22 +125,19 @@ data/
 ## 一键运行命令
 
 ```powershell
-# 完整生产链路（需指定 EPF v1.0 仓库路径）
-conda run -n epf-2 python main.py --pipeline ledger_full --date 2026-02-24 ^
-    --epf-v1-root "path\to\epf-v1" ^
+# 完整生产链路（自包含运行，无需外部 EPF 仓库）
+conda run -n epf-2 python main.py 2026-02-24 ^
     --data-path data/shandong_pmos_hourly.xlsx ^
     --seed 42
 
 # 30 天历史回填
 conda run -n epf-2 python main.py --pipeline ledger_backfill ^
     --start 2026-01-25 --end 2026-02-23 ^
-    --epf-v1-root "path\to\epf-v1" ^
     --data-path data/shandong_pmos_hourly.xlsx ^
     --seed 42
 
 # Smoke 快速测试
 conda run -n epf-2 python main.py --pipeline ledger_smoke --date 2026-02-24 ^
-    --epf-v1-root "path\to\epf-v1" ^
     --smoke-training-months 3 --smoke-timemixer-epochs 3 --smoke-timemixer-patience 1 ^
     --seed 42 --deterministic --force
 ```
@@ -151,8 +148,7 @@ conda run -n epf-2 python main.py --pipeline ledger_smoke --date 2026-02-24 ^
 
 ```powershell
 # 仅预测
-conda run -n epf-2 python main.py --pipeline ledger_predict --date 2026-02-24 ^
-    --epf-v1-root "path\to\epf-v1"
+conda run -n epf-2 python main.py --pipeline ledger_predict --date 2026-02-24
 
 # 仅权重学习（需先跑过 predict）
 conda run -n epf-2 python main.py --pipeline ledger_weight --date 2026-02-24
@@ -162,14 +158,9 @@ conda run -n epf-2 python main.py --pipeline ledger_fuse --date 2026-02-24
 
 # 仅分类器（需先跑过 fuse）
 conda run -n epf-2 python main.py --pipeline ledger_classifier --date 2026-02-24
-
-# 旧 2.0 staged pipeline（保留基线）
-conda run -n epf-2 python main.py 2026-02-24  # 等价于 --pipeline full
-conda run -n epf-2 python main.py --pipeline model_stage --date 2026-02-24
-conda run -n epf-2 python main.py --pipeline learner_stage --date 2026-02-24
-conda run -n epf-2 python main.py --pipeline fuse_stage --date 2026-02-24
-conda run -n epf-2 python main.py --pipeline classifier_stage --date 2026-02-24
 ```
+
+> Note: `--epf-v1-root` is optional for legacy compatibility only. Normal runs use bundled `lightGBM/` and `TimesFMBackend/`.
 
 ---
 
@@ -323,8 +314,11 @@ GPU queue (max_workers=1, serial):
 
 ## 常见问题
 
+**Q: Do I need the developer's old EPF folder (`--epf-v1-root`)?**
+A: No. The delivery version is self-contained. LightGBM and TimesFMBackend are bundled in this repository. The `--epf-v1-root` option is only retained for legacy compatibility and should not be used for normal delivery runs.
+
 **Q: `EPF v1 root not found` 错误？**
-A: 必须提供 `--epf-v1-root` 参数指向 EPF v1.0 仓库路径。LightGBM 和 TimesFM 需要 EPF v1.0 代码。
+A: 旧版 ledger pipeline 要求 `--epf-v1-root`。当前交付版已是自包含运行，不再需要外部 EPF 仓库。如果看到该错误，请更新代码到最新 main 分支。
 
 **Q: CUDA out of memory？**
 A: GPU queue 默认串行（max_gpu_workers=1）。如果仍有 OOM，减小 batch size（`--timemixer-batch-size 8`）。

@@ -84,9 +84,24 @@ def main() -> int:
     print("  local_paths:")
     project_root = Path(__file__).resolve().parent.parent
 
-    tf_dir = project_root / "TimesFMBackend"
-    tf_ok = tf_dir.is_dir()
-    print(f"    TimesFMBackend/: {'OK' if tf_ok else 'MISSING'}")
+    # Bundled model directories
+    print("  bundled_models:")
+    bundled_dirs = [
+        ("lightGBM", "lightGBM"),
+        ("TimesFMBackend", "TimesFMBackend"),
+        ("TimeMixer", "TimeMixer"),
+        ("SGDFNet", "SGDFNet"),
+        ("RT916_SpikeFusionNet", "RT916_SpikeFusionNet"),
+    ]
+    all_bundled_ok = True
+    for label, dirname in bundled_dirs:
+        ok = (project_root / dirname).is_dir()
+        if not ok:
+            errors.append(f"Bundled model directory missing: {dirname}/")
+            all_bundled_ok = False
+        print(f"    {label}: {'OK' if ok else 'MISSING'}")
+
+    print(f"    external_epf_root_required: false")
 
     data_file = project_root / "data" / "shandong_pmos_hourly.xlsx"
     data_ok = data_file.is_file()

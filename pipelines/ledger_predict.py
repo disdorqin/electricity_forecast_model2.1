@@ -57,10 +57,10 @@ def run_ledger_predict(args: Any) -> dict:
     Parameters
     ----------
     args : argparse.Namespace
-        Must contain: date, data_path, epf_v1_root, output_root (optional),
+        Must contain: date, data_path, output_root (optional),
         ledger_root, runs_root, max_cpu_workers, max_gpu_workers,
         allow_missing_models, force, realtime_cutoff_hour,
-        allow_v2_fallback, epf_v1_mode.
+        epf_v1_mode. epf_v1_root is optional (legacy compatibility).
 
     Returns
     -------
@@ -94,19 +94,26 @@ def run_ledger_predict(args: Any) -> dict:
     deterministic = getattr(args, "deterministic", False)
     realtime_cutoff_hour = getattr(args, "realtime_cutoff_hour", 14)
 
-    # Validate EPF v1 root is present for LightGBM/TimesFM
-    if not epf_root or not Path(epf_root).exists():
-        if allow_v2_fb:
-            logger.warning(
-                "EPF v1 root not found, but --allow-v2-fallback enabled. "
-                "LightGBM/TimesFM will use 2.0 implementations."
-            )
-        else:
-            raise FileNotFoundError(
-                "EPF v1 root not found. Please provide --epf-v1-root. "
-                "LightGBM and TimesFM require EPF v1.0 for the ledger pipeline. "
-                "Or pass --allow-v2-fallback to use 2.0 implementations."
-            )
+    # Validate EPF v1 root — optional; warn if provided but missing
+    if epf_root and not Path(epf_root).exists():
+        logger.warning(
+            "Provided --epf-v1-root does not exist: %s. "
+            "Ignoring it and using local bundled implementations.",
+            epf_root,
+        )
+        epf_root = None
+
+    # Validate bundled implementations are available
+    required_local_paths = [
+        Path("lightGBM"),
+        Path("TimesFMBackend"),
+    ]
+    missing = [str(p) for p in required_local_paths if not p.exists()]
+    if missing:
+        raise FileNotFoundError(
+            "Missing bundled model directories required for ledger pipeline: "
+            + ", ".join(missing)
+        )
 
     # Setup directories
     run_dir = runs_root / target_date
@@ -172,6 +179,14 @@ def run_ledger_predict(args: Any) -> dict:
             "seed": seed,
             "deterministic": deterministic,
         },
+    }
+    manifest["model_source"] = {
+        "lightgbm": "bundled:lightGBM/",
+        "timesfm": "bundled:TimesFMBackend/",
+        "timemixer": "bundled:TimeMixer/",
+        "sgdfnet": "bundled:SGDFNet/",
+        "rt916": "bundled:RT916_SpikeFusionNet/",
+        "external_epf_v1_root": str(epf_root) if epf_root else None,
     }
 
     try:
@@ -465,27 +480,17 @@ def _predict_lightgbm(
     seed: int = 42,
     deterministic: bool = False,
 ) -> pd.DataFrame:
-    """LightGBM prediction via EPF v1.0 adapter (fail-fast without v1 root)."""
-    if epf_root and Path(epf_root).exists():
-        from runners.adapters.lightgbm_v1 import LightGBMV1Adapter
-        adapter = LightGBMV1Adapter(epf_root, mode=epf_v1_mode)
-        return adapter.predict(
-            target_date=target_date,
-            target=task,
-            data_path=data_path,
-            cutoff_date=cutoff_date,
-            seed=seed,
-            deterministic=deterministic,
-        )
-    elif allow_v2_fallback:
-        logger.info("EPF v1.0 not found but --allow-v2-fallback, using 2.0 LightGBM")
-        return _predict_via_registry("lightgbm", task, target_date, data_path, cutoff_date,
-                                      seed=seed, deterministic=deterministic)
-    else:
-        raise FileNotFoundError(
-            "EPF v1 root not found. LightGBM requires EPF v1.0. "
-            "Provide --epf-v1-root or pass --allow-v2-fallback."
-        )
+    """LightGBM prediction via bundled adapter (local lightGBM/ by default)."""
+    from runners.adapters.lightgbm_v1 import LightGBMV1Adapter
+    adapter = LightGBMV1Adapter(epf_root=epf_root, mode=epf_v1_mode)
+    return adapter.predict(
+        target_date=target_date,
+        target=task,
+        data_path=data_path,
+        cutoff_date=cutoff_date,
+        seed=seed,
+        deterministic=deterministic,
+    )
 
 
 def _predict_timesfm(
@@ -499,27 +504,17 @@ def _predict_timesfm(
     seed: int = 42,
     deterministic: bool = False,
 ) -> pd.DataFrame:
-    """TimesFM prediction via EPF v1.0 adapter (canonical single wrapper)."""
-    if epf_root and Path(epf_root).exists():
-        from runners.adapters.timesfm_v1 import TimesFMV1Adapter
-        adapter = TimesFMV1Adapter(epf_root, mode=epf_v1_mode)
-        return adapter.predict(
-            target_date=target_date,
-            target=task,
-            data_path=data_path,
-            cutoff_date=cutoff_date,
-            seed=seed,
-            deterministic=deterministic,
-        )
-    elif allow_v2_fallback:
-        logger.info("EPF v1.0 not found but --allow-v2-fallback, using 2.0 TimesFM")
-        return _predict_via_registry("timesfm", task, target_date, data_path, cutoff_date,
-                                      seed=seed, deterministic=deterministic)
-    else:
-        raise FileNotFoundError(
-            "EPF v1 root not found. TimesFM requires EPF v1.0. "
-            "Provide --epf-v1-root or pass --allow-v2-fallback."
-        )
+    """TimesFM prediction via bundled adapter (local TimesFMBackend/ by default)."""
+    from runners.adapters.timesfm_v1 import TimesFMV1Adapter
+    adapter = TimesFMV1Adapter(epf_root=epf_root, mode=epf_v1_mode)
+    return adapter.predict(
+        target_date=target_date,
+        target=task,
+        data_path=data_path,
+        cutoff_date=cutoff_date,
+        seed=seed,
+        deterministic=deterministic,
+    )
 
 
 def _predict_timemixer(
