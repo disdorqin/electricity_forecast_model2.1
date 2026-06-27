@@ -56,6 +56,8 @@ class LightGBMV1Adapter:
         target: str = "dayahead",
         data_path: Optional[str] = None,
         cutoff_date: Optional[str] = None,
+        seed: int = 42,
+        deterministic: bool = False,
     ) -> pd.DataFrame:
         """
         Run LightGBM prediction for a single target day.
@@ -71,11 +73,19 @@ class LightGBMV1Adapter:
         cutoff_date : str, optional
             Latest date allowed in training data (YYYY-MM-DD).
             Default: target_date - 1 day.
+        seed : int
+            Global random seed for reproducibility.
+        deterministic : bool
+            Enable deterministic algorithms (may be slower).
 
         Returns
         -------
         pd.DataFrame with standardized prediction columns.
         """
+        from utils.reproducibility import set_global_seed
+
+        set_global_seed(seed, deterministic)
+
         # Map target to EPF v1.0 convention
         target_map = {"dayahead": "日前电价", "realtime": "实时电价"}
         epf_target = target_map.get(target, target)

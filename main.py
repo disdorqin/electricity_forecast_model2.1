@@ -34,6 +34,10 @@ from pipelines.ledger_smoke import run_ledger_smoke
 
 def main() -> int:
     args = build_parser().parse_args()
+    # Global reproducibility: seed must be set before any model code runs
+    from utils.reproducibility import set_global_seed
+
+    set_global_seed(args.seed, args.deterministic)
     # Positional date shortcut: `python main.py 2026-02-01`
     if args.pos_date is not None and args.date is None:
         args.date = args.pos_date

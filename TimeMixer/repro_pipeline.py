@@ -61,6 +61,7 @@ class RunConfig:
     weight_decay: float = 1e-4
     patience: int = 15
     seed: int = 42
+    deterministic: bool = False
     device: str = "auto"
     cutoff_hour_da: int = 15
     cutoff_hour_rt: int = 14
@@ -110,13 +111,21 @@ SEGMENTS: list[tuple[str, int, int]] = [
 ]
 
 
-def set_seed(seed: int = 42) -> None:
+def set_seed(seed: int = 42, deterministic: bool = False) -> None:
+    # Use the unified global reproducibility module when available
+    try:
+        from utils.reproducibility import set_global_seed
+        set_global_seed(seed, deterministic)
+        return
+    except ImportError:
+        pass
+    # Fallback: direct seed setting
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = deterministic
+    torch.backends.cudnn.benchmark = not deterministic
 
 
 def read_csv_safely(path: str) -> pd.DataFrame:
@@ -1731,7 +1740,7 @@ def update_leaderboard(
 
 
 def run_monthly_reproduction(cfg: RunConfig) -> dict[str, Any]:
-    set_seed(cfg.seed)
+    set_seed(cfg.seed, cfg.deterministic)
     device = torch.device(
         "cuda" if cfg.device == "auto" and torch.cuda.is_available() else cfg.device
         if cfg.device != "auto"

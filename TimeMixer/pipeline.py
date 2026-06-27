@@ -39,10 +39,9 @@ class ModelPipeline(BaseModelPipeline):
         # 因此 test_end_exclusive = end + 1 天，否则 test_days 为空。
         start_ts = pd.Timestamp(start_date)
         end_ts = pd.Timestamp(end_date)
-        if end_ts <= start_ts:
-            end_exclusive = (end_ts + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
-        else:
-            end_exclusive = end_date
+        # test_end_exclusive is a half-open bound: always add 1 day to end
+        # so the range [start, end_exclusive) includes the full end date
+        end_exclusive = (end_ts + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
 
         run_cfg = RunConfig(
             data_path=self._prepare_data_path(kwargs.get("data_path")),
@@ -57,7 +56,8 @@ class ModelPipeline(BaseModelPipeline):
             epochs=int(kwargs.get("timemixer_epochs", 80)),
             patience=int(kwargs.get("timemixer_patience", 15)),
             batch_size=int(kwargs.get("timemixer_batch_size", 16)),
-            seed=int(kwargs.get("timemixer_seeds", 42)),
+            seed=int(kwargs.get("seed", kwargs.get("timemixer_seeds", 42))),
+            deterministic=bool(kwargs.get("deterministic", False)),
         )
         result = run_monthly_reproduction(run_cfg)
         raw = pd.read_csv(Path(result["output_dir"]) / "predictions_raw.csv", encoding="utf-8-sig")
@@ -74,6 +74,10 @@ class ModelPipeline(BaseModelPipeline):
         if filtered.empty:
             raise ValueError(f"TimeMixer task={task_filter} filter yielded 0 rows for {predict_date.date()}")
         normalized = ensure_prediction_frame(filtered.rename(columns={"ds": "时刻"}), prediction_col)
+
+        # ---- TimeMixer output validation: 24 rows, hour_business 1..24 ----
+        _validate_timemixer_output(normalized, predict_date, target)
+
         output_path = output_root / "predictions.csv"
         normalized.to_csv(output_path, index=False, encoding="utf-8-sig")
         return PredictionResult(model_name=self.model_name, target=target, output_path=output_path, frame=normalized)
@@ -98,3 +102,43 @@ class ModelPipeline(BaseModelPipeline):
         csv_path = tmp_dir / f"{path.stem}.csv"
         df.to_csv(csv_path, index=False, encoding="utf-8-sig")
         return str(csv_path)
+
+
+def _validate_timemixer_output(df: pd.DataFrame, predict_date: pd.Timestamp, target: str) -> None:
+    """Validate TimeMixer output: 24 rows, hour_business 1..24, no D 00:00."""
+    issues: list[str] = []
+
+    if len(df) != 24:
+        issues.append(f"expected 24 rows, got {len(df)}")
+
+    if "hour_business" in df.columns:
+        hours = sorted(df["hour_business"].dropna().astype(int).unique())
+        expected_hours = list(range(1, 25))
+        if hours != expected_hours:
+            missing = set(expected_hours) - set(hours)
+            extra = set(hours) - set(expected_hours)
+            if missing:
+                issues.append(f"missing hour_business: {sorted(missing)}")
+            if extra:
+                issues.append(f"extra hour_business: {sorted(extra)}")
+
+        # hour 24 must not map to predict_date 00:00
+        if "ds" in df.columns:
+            h24_rows = df[df["hour_business"] == 24]
+            if not h24_rows.empty:
+                ds_vals = pd.to_datetime(h24_rows["ds"]).dropna().unique()
+                target_dt = pd.Timestamp(predict_date.date())
+                for ds in ds_vals:
+                    if ds.hour == 0 and ds.date() == target_dt.date():
+                        issues.append(
+                            f"hour_business=24 ds={ds}: should be D+1 00:00, not D 00:00"
+                        )
+
+    if "hour_business" in df.columns and 0 in df["hour_business"].values:
+        issues.append("hour_business=0 found; should be 1..24 (with 24=mapping to 00:00 of D+1)")
+
+    if issues:
+        raise ValueError(
+            f"TimeMixer output validation FAILED for {target} {predict_date.date()}: "
+            f"{' | '.join(issues)}"
+        )

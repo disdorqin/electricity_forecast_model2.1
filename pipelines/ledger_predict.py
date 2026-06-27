@@ -90,6 +90,8 @@ def run_ledger_predict(args: Any) -> dict:
     timemixer_batch_size = getattr(args, "timemixer_batch_size", 16)
     timemixer_full_refit = getattr(args, "timemixer_full_refit", True)
     timemixer_seeds = getattr(args, "timemixer_seeds", 42)
+    seed = getattr(args, "seed", 42)
+    deterministic = getattr(args, "deterministic", False)
     realtime_cutoff_hour = getattr(args, "realtime_cutoff_hour", 14)
 
     # Validate EPF v1 root is present for LightGBM/TimesFM
@@ -121,6 +123,8 @@ def run_ledger_predict(args: Any) -> dict:
         "pipeline": "ledger_predict",
         "target_date": target_date,
         "realtime_cutoff_hour": rt_cutoff_hour,
+        "seed": seed,
+        "deterministic": deterministic,
         "epf_v1_mode": epf_v1_mode,
         "started_at": datetime.now(timezone.utc).isoformat(),
         "status": "running",
@@ -182,6 +186,8 @@ def run_ledger_predict(args: Any) -> dict:
             timemixer_batch_size=timemixer_batch_size,
             timemixer_full_refit=timemixer_full_refit,
             timemixer_seeds=timemixer_seeds,
+            seed=seed,
+            deterministic=deterministic,
             run_dir=run_dir,
             max_cpu=max_cpu,
             max_gpu=max_gpu,
@@ -211,6 +217,8 @@ def run_ledger_predict(args: Any) -> dict:
             timemixer_batch_size=timemixer_batch_size,
             timemixer_full_refit=timemixer_full_refit,
             timemixer_seeds=timemixer_seeds,
+            seed=seed,
+            deterministic=deterministic,
             run_dir=run_dir,
             max_cpu=max_cpu,
             max_gpu=max_gpu,
@@ -267,6 +275,8 @@ def _run_model_set(
     timemixer_batch_size: int = 16,
     timemixer_full_refit: bool = True,
     timemixer_seeds: int = 42,
+    seed: int = 42,
+    deterministic: bool = False,
     run_dir: Path = None,
     max_cpu: int = 2,
     max_gpu: int = 1,
@@ -324,6 +334,8 @@ def _run_model_set(
                 "timemixer_batch_size": timemixer_batch_size,
                 "timemixer_full_refit": timemixer_full_refit,
                 "timemixer_seeds": timemixer_seeds,
+                "seed": seed,
+                "deterministic": deterministic,
                 "output_path": str(output_path),
             },
         )
@@ -374,6 +386,8 @@ def _predict_model(
     timemixer_batch_size: int = 16,
     timemixer_full_refit: bool = True,
     timemixer_seeds: int = 42,
+    seed: int = 42,
+    deterministic: bool = False,
     output_path: str = "",
 ) -> pd.DataFrame:
     """
@@ -383,24 +397,27 @@ def _predict_model(
     logger.info(f"Predicting: {model_name}/{task} on {target_date}")
 
     if model_name == "lightgbm":
-        df = _predict_lightgbm(task, target_date, data_path, epf_root, allow_v2_fallback, epf_v1_mode, cutoff_date)
+        df = _predict_lightgbm(task, target_date, data_path, epf_root, allow_v2_fallback, epf_v1_mode, cutoff_date, seed=seed, deterministic=deterministic)
     elif model_name == "timesfm":
-        df = _predict_timesfm(task, target_date, data_path, epf_root, allow_v2_fallback, epf_v1_mode, cutoff_date)
+        df = _predict_timesfm(task, target_date, data_path, epf_root, allow_v2_fallback, epf_v1_mode, cutoff_date, seed=seed, deterministic=deterministic)
     elif model_name == "timemixer":
         df = _predict_timemixer(
             task, target_date, data_path, cutoff_date,
             realtime_cutoff_hour, training_months, val_ratio,
             timemixer_epochs, timemixer_patience, timemixer_batch_size,
             timemixer_full_refit, timemixer_seeds,
+            seed=seed, deterministic=deterministic,
         )
     elif model_name == "sgdfnet":
         df = _predict_sgdfnet(
-            task, target_date, data_path, cutoff_date, realtime_cutoff_hour
+            task, target_date, data_path, cutoff_date, realtime_cutoff_hour,
+            seed=seed, deterministic=deterministic,
         )
     elif model_name == "rt916":
         df = _predict_rt916(
             task, target_date, data_path, cutoff_date,
             realtime_cutoff_hour, training_months,
+            seed=seed, deterministic=deterministic,
         )
     else:
         raise ValueError(f"Unknown model: {model_name}")
@@ -437,6 +454,8 @@ def _predict_lightgbm(
     allow_v2_fallback: bool,
     epf_v1_mode: str,
     cutoff_date: str,
+    seed: int = 42,
+    deterministic: bool = False,
 ) -> pd.DataFrame:
     """LightGBM prediction via EPF v1.0 adapter (fail-fast without v1 root)."""
     if epf_root and Path(epf_root).exists():
@@ -447,10 +466,13 @@ def _predict_lightgbm(
             target=task,
             data_path=data_path,
             cutoff_date=cutoff_date,
+            seed=seed,
+            deterministic=deterministic,
         )
     elif allow_v2_fallback:
         logger.info("EPF v1.0 not found but --allow-v2-fallback, using 2.0 LightGBM")
-        return _predict_via_registry("lightgbm", task, target_date, data_path, cutoff_date)
+        return _predict_via_registry("lightgbm", task, target_date, data_path, cutoff_date,
+                                      seed=seed, deterministic=deterministic)
     else:
         raise FileNotFoundError(
             "EPF v1 root not found. LightGBM requires EPF v1.0. "
@@ -466,6 +488,8 @@ def _predict_timesfm(
     allow_v2_fallback: bool,
     epf_v1_mode: str,
     cutoff_date: str,
+    seed: int = 42,
+    deterministic: bool = False,
 ) -> pd.DataFrame:
     """TimesFM prediction via EPF v1.0 adapter (canonical single wrapper)."""
     if epf_root and Path(epf_root).exists():
@@ -476,10 +500,13 @@ def _predict_timesfm(
             target=task,
             data_path=data_path,
             cutoff_date=cutoff_date,
+            seed=seed,
+            deterministic=deterministic,
         )
     elif allow_v2_fallback:
         logger.info("EPF v1.0 not found but --allow-v2-fallback, using 2.0 TimesFM")
-        return _predict_via_registry("timesfm", task, target_date, data_path, cutoff_date)
+        return _predict_via_registry("timesfm", task, target_date, data_path, cutoff_date,
+                                      seed=seed, deterministic=deterministic)
     else:
         raise FileNotFoundError(
             "EPF v1 root not found. TimesFM requires EPF v1.0. "
@@ -500,6 +527,8 @@ def _predict_timemixer(
     timemixer_batch_size: int = 16,
     timemixer_full_refit: bool = True,
     timemixer_seeds: int = 42,
+    seed: int = 42,
+    deterministic: bool = False,
 ) -> pd.DataFrame:
     """TimeMixer prediction using 2.0 model (GPU preferred)."""
     return _predict_via_registry(
@@ -512,6 +541,8 @@ def _predict_timemixer(
         timemixer_batch_size=timemixer_batch_size,
         timemixer_full_refit=timemixer_full_refit,
         timemixer_seeds=timemixer_seeds,
+        seed=seed,
+        deterministic=deterministic,
     )
 
 
@@ -521,11 +552,15 @@ def _predict_sgdfnet(
     data_path: str,
     cutoff_date: str,
     realtime_cutoff_hour: int = 14,
+    seed: int = 42,
+    deterministic: bool = False,
 ) -> pd.DataFrame:
     """SGDFNet prediction using 2.0 model (CPU)."""
     return _predict_via_registry(
         "sgdfnet", task, target_date, data_path, cutoff_date,
         realtime_cutoff_hour=realtime_cutoff_hour,
+        seed=seed,
+        deterministic=deterministic,
     )
 
 
@@ -536,12 +571,16 @@ def _predict_rt916(
     cutoff_date: str,
     realtime_cutoff_hour: int = 14,
     training_months: int = 12,
+    seed: int = 42,
+    deterministic: bool = False,
 ) -> pd.DataFrame:
     """RT916 prediction using 2.0 model (GPU)."""
     return _predict_via_registry(
         "rt916", task, target_date, data_path, cutoff_date,
         realtime_cutoff_hour=realtime_cutoff_hour,
         training_months=training_months,
+        seed=seed,
+        deterministic=deterministic,
     )
 
 
@@ -559,6 +598,8 @@ def _predict_via_registry(
     timemixer_batch_size: int = 16,
     timemixer_full_refit: bool = True,
     timemixer_seeds: int = 42,
+    seed: int = 42,
+    deterministic: bool = False,
 ) -> pd.DataFrame:
     """
     Run prediction via the existing 2.0 model registry.
@@ -586,6 +627,9 @@ def _predict_via_registry(
         timemixer_batch_size=timemixer_batch_size,
         timemixer_full_refit=timemixer_full_refit,
         timemixer_seeds=timemixer_seeds,
+        # Generic reproducibility pass-through
+        seed=seed,
+        deterministic=deterministic,
     )
 
     if result is None or result.frame is None:

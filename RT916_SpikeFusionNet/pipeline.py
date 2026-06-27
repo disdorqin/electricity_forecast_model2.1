@@ -27,7 +27,18 @@ class ModelPipeline(BaseModelPipeline):
     model_name = "rt916"
     device_type = "gpu"
 
+    @staticmethod
+    def _apply_seed(kwargs: dict) -> None:
+        """Apply seed/deterministic to RT916 core config and global state."""
+        from utils.reproducibility import set_global_seed
+
+        seed = int(kwargs.get("seed", 42))
+        deterministic = bool(kwargs.get("deterministic", False))
+        set_global_seed(seed, deterministic)
+        core.CONFIG["SEED"] = seed
+
     def train(self, target: str = "realtime", **kwargs):
+        self._apply_seed(kwargs)
         _dp = kwargs.get("data_path")
         if _dp:
             core.RAW_DF_PATH = os.path.abspath(_dp)
@@ -38,6 +49,8 @@ class ModelPipeline(BaseModelPipeline):
         return self.predict_range(**kwargs)
 
     def predict_range(self, target: str, **kwargs) -> PredictionResult:
+        # Reproducibility
+        self._apply_seed(kwargs)
         # Disable AMP during RT916 inference — model weights saved in BFloat16
         # cause "Unsupported dtype BFloat16" when converted to numpy.
         # Training (separate path) still benefits from AMP.

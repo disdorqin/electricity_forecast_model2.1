@@ -197,6 +197,13 @@ class ResourceScheduler:
 
     def _execute_task(self, task: ScheduleTask) -> ScheduleResult:
         """Execute a single task in the current process."""
+        # Reproducibility: set seed in the executing thread/process
+        from utils.reproducibility import set_global_seed
+
+        set_global_seed(
+            int(task.kwargs.get("seed", 42)),
+            bool(task.kwargs.get("deterministic", False)),
+        )
         logger.info(
             f"[{task.device.upper()}] {task.model_name}/{task.task_name} "
             f"on {task.target_date} starting..."
@@ -235,6 +242,12 @@ class ResourceScheduler:
 
 def _execute_in_subprocess(fn: Callable, kwargs: dict) -> Any:
     """Wrapper for ProcessPoolExecutor — function must be picklable."""
+    from utils.reproducibility import set_global_seed
+
+    set_global_seed(
+        int(kwargs.get("seed", 42)),
+        bool(kwargs.get("deterministic", False)),
+    )
     return fn(**kwargs)
 
 

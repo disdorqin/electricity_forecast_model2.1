@@ -38,6 +38,11 @@ class ModelPipeline(BaseModelPipeline):
         return self.predict_range(**kwargs)
 
     def predict_range(self, target: str, **kwargs) -> PredictionResult:
+        # Reproducibility
+        from utils.reproducibility import set_global_seed
+
+        set_global_seed(int(kwargs.get("seed", 42)), bool(kwargs.get("deterministic", False)))
+
         output_root = ensure_runtime_dirs(
             Path(kwargs.get("output_root", "outputs/unified_runs")) / self.model_name / target
         )
@@ -60,6 +65,8 @@ class ModelPipeline(BaseModelPipeline):
             end_day=end_day,
             output_root=str(output_root / "sgdfnet_runs"),
             decision_hour=decision_hour,
+            seed=int(kwargs.get("seed", 42)),
+            deterministic=bool(kwargs.get("deterministic", False)),
         )
 
         run_dir = Path(run_protocol_b_cutoff_experiment(tmp_config))
@@ -118,6 +125,8 @@ class ModelPipeline(BaseModelPipeline):
         end_day: str,
         output_root: str,
         decision_hour: int = 14,
+        seed: int = 42,
+        deterministic: bool = False,
     ) -> Path:
         """Create a temporary YAML config overriding key fields from the base config."""
         with open(self.config_path, "r", encoding="utf-8") as f:
@@ -130,6 +139,8 @@ class ModelPipeline(BaseModelPipeline):
         base_cfg["end_day"] = end_day
         base_cfg["output_root"] = output_root
         base_cfg["decision_hour"] = int(decision_hour)
+        base_cfg["seed"] = int(seed)
+        base_cfg["deterministic"] = bool(deterministic)
 
         # Write to temp file
         tmp_dir = Path(tempfile.gettempdir()) / "sgdfnet_staged_configs"

@@ -59,6 +59,8 @@ class TimesFMV1Adapter:
         target: str = "dayahead",
         data_path: Optional[str] = None,
         cutoff_date: Optional[str] = None,
+        seed: int = 42,
+        deterministic: bool = False,
     ) -> pd.DataFrame:
         """
         Run TimesFM prediction for a single target day.
@@ -73,11 +75,19 @@ class TimesFMV1Adapter:
             Path to data file.
         cutoff_date : str, optional
             Latest date allowed in input data. Default: target_date - 1 day.
+        seed : int
+            Global random seed for reproducibility.
+        deterministic : bool
+            Enable deterministic algorithms (may be slower).
 
         Returns
         -------
         pd.DataFrame with standardized prediction columns.
         """
+        from utils.reproducibility import set_global_seed
+
+        set_global_seed(seed, deterministic)
+
         if cutoff_date is None:
             cutoff_date = (pd.Timestamp(target_date) - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
 
