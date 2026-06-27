@@ -113,7 +113,7 @@ class TimesFMV1Adapter:
             safe_data_path = data_path
 
         try:
-            from TF.infer import predict_price_for_date
+            from TimesFMBackend.infer import predict_price_for_date
 
             df = predict_price_for_date(
                 data_path=safe_data_path,

@@ -35,8 +35,6 @@ checkpoints/
 *.npz
 
 # Archives & run outputs (kept locally, not in repo)
-_archive/
-**/_archive/
 fusion_runs/
 daily_runs/
 daily_runs_*/

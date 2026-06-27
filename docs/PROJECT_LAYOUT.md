@@ -10,7 +10,7 @@
 | `runtime/` | CPU/GPU resource scheduler for concurrent model execution | **Yes** | commit | KEEP |
 | `fusion/` | Fusion core: BGEW learner, weight application, classifier bridge, per-model adapters, metrics, legacy experiment scripts | **Yes** (select files) | commit | KEEP (needs cleanup) |
 | `lightGBM/` | LightGBM model pipeline (standalone) | **Yes** | commit | KEEP |
-| `TF/` | **Active TimesFM prediction engine** (EPF v1 backend, NOT TensorFlow). Contains full timesfm_2p5 PyTorch+Flax implementation | **Yes** (via runners/adapters/timesfm_v1.py) | commit | KEEP |
+| `TimesFMBackend/` | **Active TimesFM prediction engine** (EPF v1 backend, NOT TensorFlow). Contains full timesfm_2p5 PyTorch+Flax implementation. Renamed from `TF/` to avoid TensorFlow confusion | **Yes** (via runners/adapters/timesfm_v1.py) | commit | KEEP |
 | `TimeMixer/` | TimeMixer model pipeline (standalone, GPU) | **Yes** | commit | KEEP |
 | `RT916_SpikeFusionNet/` | RT916 (SpikeFusionNet) model pipeline (standalone, GPU) | **Yes** | commit | KEEP |
 | `SGDFNet/` | SGDFNet model pipeline (standalone, CPU) | **Yes** | commit | KEEP |
@@ -21,9 +21,8 @@
 | `data/` | Local input data (Excel/CSV) | Yes (model input) | **ignore** | KEEP |
 | `outputs/` | All pipeline run artifacts: ledger storage, daily runs, smoke, repro check | No (generated) | **ignore** | KEEP |
 | `models/` | Pre-trained model weight caches (~885 MB) | No (model weights) | **ignore** | KEEP |
-| `daily_runs/` | Old staged pipeline output format (legacy) | No (legacy) | **ignore** | ARCHIVE_LATER |
+| `_archive/` | Legacy code preserved for traceability: legacy_timesfm_wrapper, legacy_staged_pipeline, fusion_legacy, dev_scripts | No | commit | KEEP |
 | `optim/` | Training performance knobs (TF32, AMP, DataLoader) | Partial (imported by TimeMixer/RT916) | commit | KEEP |
-| `services/` | Fusion/predict service wrappers (old staged pipeline) | No (old pipeline) | commit | INVESTIGATE |
 | `.claude/` | Claude Code memory/persistence (local tooling) | No | **ignore** | KEEP |
 | `.workbuddy/` | Workbuddy workspace data (local tooling) | No | **ignore** | KEEP |
 
@@ -39,8 +38,8 @@ main.py
        │   │   ├─ TimeMixer.pipeline           ← TimeMixer/
        │   │   ├─ RT916_SpikeFusionNet.pipeline ← RT916_SpikeFusionNet/
        │   │   ├─ SGDFNet.pipeline             ← SGDFNet/
-       │   │   └─ TimesFM.pipeline             ← TimesFM/ (legacy wrapper)
-       │   ├─ runners/adapters/timesfm_v1.py  → TF/infer.py (active TimesFM)
+       │   │   # Note: TimesFM removed from registry — ledger uses adapter directly
+       │   ├─ runners/adapters/timesfm_v1.py  → TimesFMBackend/infer.py (active TimesFM)
        │   ├─ runners/adapters/lightgbm_v1.py → lightGBM/ (EPF v1)
        │   └─ runtime/resource_scheduler.py   ← CPU/GPU queuing
        ├─ ledger_weight.py
@@ -54,18 +53,15 @@ main.py
        └─ ledger_smoke.py      ← smoke test wrapper
 ```
 
-## TF/ vs TimesFM/
+## TimesFMBackend/ (formerly TF/)
 
-**Current state:**
+**Current state:** The `TF/` directory has been renamed to `TimesFMBackend/` to eliminate the misleading `TF/` name (which was never TensorFlow). The old legacy `TimesFM/` wrapper has been archived to `_archive/legacy_timesfm_wrapper/`.
 
-| Directory | Role | Used by ledger_full | Used by staged_pipeline |
-|-----------|------|---------------------|------------------------|
-| `TF/` | **Active TimesFM backend.** Contains full `src/timesfm/` package (PyTorch + Flax). Entry: `TF.infer.predict_price_for_date()` | **Yes** (via `runners/adapters/timesfm_v1.py`) | No |
-| `TimesFM/` | **Legacy wrapper.** Has its own `pipeline.py` + `infer.py` that dynamically falls back to `TF/price_forecast_copy_分时段预测.py`. Contains duplicate `src/timesfm/` copy. | No | Yes (via `runners/registry.py`) |
+| Directory | Role | Used by ledger_full |
+|-----------|------|---------------------|
+| `TimesFMBackend/` | **Active TimesFM backend.** Contains full `src/timesfm/` package (PyTorch + Flax). Entry: `TimesFMBackend.infer.predict_price_for_date()` | **Yes** (via `runners/adapters/timesfm_v1.py`) |
 
-**Why both exist:** `TimesFM/` was the original 2.0 wrapper. `TF/` was added as the EPF v1.0 backend for the ledger pipeline. The ledger pipeline uses `TF/` exclusively. `TimesFM/` is only used by the old staged pipeline.
-
-**Next step:** After confirming the staged pipeline is no longer needed, `TimesFM/` can be moved to `_archive/`. `TF/` should be kept as the canonical TimesFM directory (rename considered but not recommended to avoid breaking imports).
+**History:** `TimesFM/` was the original 2.0 wrapper. `TF/` was added as the EPF v1.0 backend. Both contained duplicate `src/timesfm/` copies. After the staged pipeline was retired, `TF/` was renamed to `TimesFMBackend/` and `TimesFM/` was archived.
 
 ## Fusion Module Status
 
@@ -86,16 +82,19 @@ main.py
 | `fusion/pipeline_common.py` | Shared pipeline helpers |
 | `fusion/project_defaults.py` | Defaults config |
 
-**Legacy files (not used by ledger pipeline):**
+**Legacy files (archived to `_archive/fusion_legacy/`):**
+
+All legacy fusion experiment runners and scripts have been moved to `_archive/fusion_legacy/`:
 
 - `fusion/run_pipeline.py`, `fusion/run_dayahead_pipeline.py`, `fusion/run_realtime_pipeline.py`
 - `fusion/run_fit.py`, `fusion/run_end_to_end_fixed_fusion.py`, `fusion/run_final_fusion_pipeline.py`
 - `fusion/run_rolling_backtest.py`, `fusion/run_full_fusion_suite.py`
 - `fusion/run_repro_training_length_suite.py`, `fusion/prepare_history_outputs.py`
 - `fusion/prepare_manifest.py`, `fusion/repro_suite.py`, `fusion/meta_learner.py`
-- `fusion/runners/*.py` (all 15+ files, various experiment runners)
+- `fusion/manifest_template.csv`
+- `fusion/runners/*.py` (all 17 files, various experiment runners)
 
-These legacy files are candidates for `_archive/fusion_legacy/` in a future cleanup phase.
+These files are preserved for traceability but not imported by any active pipeline.
 
 ## Output Structure
 
