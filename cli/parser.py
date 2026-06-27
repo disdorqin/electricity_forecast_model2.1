@@ -1,6 +1,90 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime
+
+
+def _parse_yyyy_mm_dd(value: str, parser: argparse.ArgumentParser, field_name: str) -> str:
+    """Validate and return a YYYY-MM-DD date string. Raises parser.error on failure."""
+    try:
+        dt = datetime.strptime(value, "%Y-%m-%d")
+        return value
+    except ValueError:
+        parser.error(
+            f"Invalid date for {field_name}: '{value}'. "
+            f"Expected YYYY-MM-DD format (e.g. 2026-02-24)."
+        )
+
+
+def normalize_date_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
+    """
+    Normalize date-related arguments after parse_args().
+
+    Handles:
+      - Single positional  → args.date = value, pipeline = ledger_full
+      - Two positionals    → args.start/end = values, pipeline = ledger_full_range
+      - --start/--end      → auto-switch to ledger_full_range if not explicitly set
+      - Conflict detection  → parser.error(...)
+      - Date validation    → ensures YYYY-MM-DD format
+    """
+    # Validate date format for any provided date values
+    if args.pos_date is not None:
+        args.pos_date = _parse_yyyy_mm_dd(args.pos_date, parser, "pos_date")
+    if args.pos_end is not None:
+        args.pos_end = _parse_yyyy_mm_dd(args.pos_end, parser, "pos_end")
+    if args.date is not None:
+        args.date = _parse_yyyy_mm_dd(args.date, parser, "--date")
+    if args.start is not None:
+        args.start = _parse_yyyy_mm_dd(args.start, parser, "--start")
+    if args.end is not None:
+        args.end = _parse_yyyy_mm_dd(args.end, parser, "--end")
+
+    # --- Conflict detection ---
+    has_range_args = args.start is not None or args.end is not None
+
+    if args.pos_date is not None and args.pos_end is not None:
+        # Two positionals
+        if args.date is not None:
+            parser.error("Cannot use both positional dates and --date")
+        if has_range_args:
+            parser.error("Cannot use both positional dates and --start/--end")
+        args.start = args.pos_date
+        args.end = args.pos_end
+        args.pipeline = "ledger_full_range"
+
+    elif args.pos_date is not None:
+        # Single positional
+        if args.date is not None:
+            parser.error("Cannot use both positional date and --date")
+        if has_range_args:
+            parser.error("Cannot use positional date together with --start/--end")
+        args.date = args.pos_date
+
+    # Explicit --date conflicts with --start/--end
+    if args.date is not None and has_range_args:
+        parser.error("Cannot use --date together with --start/--end")
+
+    # Auto-switch to range mode when --start/--end are provided with default pipeline
+    if has_range_args:
+        if not args.start or not args.end:
+            parser.error("Range mode requires both --start and --end")
+        if args.pipeline == "ledger_full":
+            args.pipeline = "ledger_full_range"
+
+    # --- Pipeline-specific validations ---
+    if args.pipeline == "ledger_full_range":
+        if not args.start or not args.end:
+            parser.error("ledger_full_range requires --start and --end (or two positional dates)")
+        # Validate start <= end using parsed dates
+        if datetime.strptime(args.start, "%Y-%m-%d") > datetime.strptime(args.end, "%Y-%m-%d"):
+            parser.error(f"--start ({args.start}) must be <= --end ({args.end})")
+    elif args.pipeline in ("ledger_full", "ledger_predict", "ledger_weight",
+                           "ledger_fuse", "ledger_classifier", "ledger_smoke"):
+        if not args.date:
+            parser.error(f"--pipeline {args.pipeline} requires --date (or positional date)")
+    elif args.pipeline == "ledger_backfill":
+        if not args.start or not args.end:
+            parser.error("ledger_backfill requires --start and --end")
 
 
 def build_parser() -> argparse.ArgumentParser:

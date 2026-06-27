@@ -102,9 +102,11 @@ def run_ledger_full_range(args: Any) -> dict:
                 expected_cols = {"business_day", "ds", "hour_business", "period", "dayahead_price", "realtime_price"}
                 if expected_cols.issubset(verify_df.columns) and len(verify_df) == 24:
                     logger.info(f"Skipping {target_date}: submission_ready.csv exists and looks valid")
+                    daily_manifest_path = runs_root / target_date / "run_manifest.json"
                     range_manifest["daily_results"].append({
                         "date": target_date,
                         "status": "skipped",
+                        "manifest_path": str(daily_manifest_path),
                         "submission_ready_path": str(submission_path),
                         "warnings_count": 0,
                         "errors_count": 0,
@@ -120,9 +122,11 @@ def run_ledger_full_range(args: Any) -> dict:
             day_result = run_ledger_full(day_args)
             day_status = day_result.get("status", "unknown")
 
+            daily_manifest_path = runs_root / target_date / "run_manifest.json"
             range_manifest["daily_results"].append({
                 "date": target_date,
                 "status": day_status,
+                "manifest_path": str(daily_manifest_path),
                 "submission_ready_path": str(submission_path) if submission_path.exists() else None,
                 "warnings_count": len(day_result.get("warnings", [])),
                 "errors_count": len(day_result.get("errors", [])),
@@ -142,9 +146,11 @@ def run_ledger_full_range(args: Any) -> dict:
 
         except Exception as e:
             logger.exception(f"Range day {target_date} failed: {e}")
+            daily_manifest_path = runs_root / target_date / "run_manifest.json"
             range_manifest["daily_results"].append({
                 "date": target_date,
                 "status": "error",
+                "manifest_path": str(daily_manifest_path),
                 "submission_ready_path": None,
                 "warnings_count": 0,
                 "errors_count": 1,
@@ -189,8 +195,22 @@ def run_ledger_full_range(args: Any) -> dict:
 
 
 def _run_preflight(args: Any, start_date: str) -> list[str]:
-    """Lightweight preflight checks; return list of error messages."""
+    """
+    Lightweight preflight checks for range pipeline.
+
+    Checks:
+      - data_path exists
+      - All 4 ledger parquet files exist and are readable
+      - Each ledger covers >= 30 unique days for window D-30..D-1
+      - Dayahead prediction has expected models (lightgbm, timesfm, timemixer)
+      - Realtime prediction has expected models (timesfm, sgdfnet, timemixer, rt916)
+
+    Note: This is a lightweight coverage check. It does NOT guarantee final
+    correctness. Full validation must use verify_final_pipeline /
+    verify_range_pipeline after the run.
+    """
     errors = []
+    warnings = []
 
     # Check data_path exists
     data_path = getattr(args, "data_path", "data/shandong_pmos_hourly.xlsx")
@@ -201,26 +221,81 @@ def _run_preflight(args: Any, start_date: str) -> list[str]:
     ledger_root = Path(getattr(args, "ledger_root", "outputs/ledger"))
     if not ledger_root.exists():
         errors.append(f"Ledger root not found: {ledger_root}. Run backfill or copy from fixtures/seed_ledger/. (Use --no-range-preflight to skip)")
+        return errors  # Cannot proceed further
 
-    # Check D-30 to D-1 ledger roughly exists for the first day
-    if not errors and ledger_root.exists():
-        start_dt = pd.Timestamp(start_date)
-        d30 = (start_dt - pd.Timedelta(days=30)).strftime("%Y-%m-%d")
-        d1 = (start_dt - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
-        da_pred = ledger_root / "dayahead" / "prediction" / "prediction_ledger.parquet"
-        if da_pred.exists():
-            try:
-                df = pd.read_parquet(da_pred)
-                dates = pd.to_datetime(df["target_day"]).unique()
-                if len(dates) < 30:
-                    errors.append(
-                        f"Day-ahead prediction ledger only has {len(dates)} unique days "
-                        f"(need >= 30 for window D-30..D-1 = {d30}..{d1})"
+    start_dt = pd.Timestamp(start_date)
+    d30 = (start_dt - pd.Timedelta(days=30)).strftime("%Y-%m-%d")
+    d1 = (start_dt - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+
+    # Define the 4 ledger files to check
+    ledger_files = {
+        "dayahead prediction": ledger_root / "dayahead" / "prediction" / "prediction_ledger.parquet",
+        "dayahead actual": ledger_root / "dayahead" / "actual" / "actual_ledger.parquet",
+        "realtime prediction": ledger_root / "realtime" / "prediction" / "prediction_ledger.parquet",
+        "realtime actual": ledger_root / "realtime" / "actual" / "actual_ledger.parquet",
+    }
+
+    for label, path in ledger_files.items():
+        if not path.exists():
+            errors.append(f"Ledger file not found: {path} ({label})")
+            continue
+
+        try:
+            df = pd.read_parquet(path)
+        except Exception as e:
+            errors.append(
+                f"Cannot read parquet ledger: {path} ({label}). "
+                f"Ensure pyarrow is installed or regenerate ledger. Error: {e}"
+            )
+            continue
+
+        # Check date coverage
+        date_col = "target_day" if "target_day" in df.columns else "business_day"
+        if date_col not in df.columns:
+            errors.append(f"Ledger {path} ({label}) has no '{date_col}' column")
+            continue
+
+        dates = pd.to_datetime(df[date_col].unique())
+        if len(dates) < 30:
+            errors.append(
+                f"Ledger {label}: {len(dates)} unique days, "
+                f"need >= 30 for window D-30..D-1 = {d30}..{d1}. File: {path}"
+            )
+
+        # Check hour_business coverage (24 hours per day)
+        if "hour_business" in df.columns:
+            hours_per_day = df.groupby(date_col)["hour_business"].nunique()
+            incomplete_days = hours_per_day[hours_per_day < 24]
+            if not incomplete_days.empty:
+                # Warn, don't error — some days may be partial (e.g., today)
+                for bad_day, n_hours in incomplete_days.head(3).items():
+                    warnings.append(
+                        f"Ledger {label}: day {bad_day} has only {n_hours}/24 hours"
                     )
-            except Exception as e:
-                errors.append(f"Cannot read prediction ledger: {e}")
-        else:
-            errors.append(f"Day-ahead prediction ledger not found: {da_pred}")
+
+        # Check model coverage for prediction ledgers
+        if "prediction" in label and "model_name" in df.columns:
+            models_found = set(df["model_name"].unique())
+            if "dayahead" in label:
+                expected_models = {"lightgbm", "timesfm", "timemixer"}
+                missing = expected_models - models_found
+                if missing:
+                    warnings.append(
+                        f"Ledger {label}: missing expected models {missing}. "
+                        f"Found: {models_found}. File: {path}"
+                    )
+            elif "realtime" in label:
+                expected_models = {"timesfm", "sgdfnet", "timemixer", "rt916"}
+                missing = expected_models - models_found
+                if missing:
+                    warnings.append(
+                        f"Ledger {label}: missing expected models {missing}. "
+                        f"Found: {models_found}. File: {path}"
+                    )
+
+    # Log warnings but don't fail for them
+    for w in warnings:
+        logger.warning(f"Preflight warning: {w}")
 
     return errors
 
@@ -241,31 +316,31 @@ def _write_range_summary(range_dir: Path, manifest: dict):
     """Write range_summary.csv from manifest daily_results."""
     rows = []
     for dr in manifest.get("daily_results", []):
+        sp = dr.get("submission_ready_path")
+        submission_ready_exists = sp is not None and Path(sp).exists()
+        submission_ready_rows = 0
+        if submission_ready_exists:
+            try:
+                sr_df = pd.read_csv(sp)
+                submission_ready_rows = len(sr_df)
+            except Exception:
+                pass
+
         rows.append({
             "date": dr["date"],
             "status": dr["status"],
-            "submission_ready_exists": dr.get("submission_ready_path") is not None,
-            "submission_ready_rows": 0,
+            "submission_ready_exists": submission_ready_exists,
+            "submission_ready_rows": submission_ready_rows,
             "errors_count": dr.get("errors_count", 0),
             "warnings_count": dr.get("warnings_count", 0),
-            "manifest_path": dr.get("submission_ready_path", ""),
+            "manifest_path": dr.get("manifest_path", ""),
+            "submission_ready_path": sp or "",
         })
 
     if not rows:
         return
 
     summary_df = pd.DataFrame(rows)
-
-    # Try to fill submission_ready_rows from actual file
-    for i, row in enumerate(rows):
-        sp = row.get("manifest_path")
-        if sp and Path(sp).exists():
-            try:
-                sr_df = pd.read_csv(sp)
-                summary_df.at[i, "submission_ready_rows"] = len(sr_df)
-            except Exception:
-                pass
-
     summary_path = range_dir / "range_summary.csv"
     summary_df.to_csv(summary_path, index=False)
     logger.info(f"Range summary: {len(rows)} days -> {summary_path}")

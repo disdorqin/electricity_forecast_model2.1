@@ -8,7 +8,7 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 
-from cli.parser import build_parser
+from cli.parser import build_parser, normalize_date_args
 from pipelines.evaluate_pipeline import run_evaluate_pipeline
 from pipelines.sync_dataset_pipeline import run_sync_dataset_pipeline
 
@@ -27,43 +27,13 @@ def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
 
+    # Normalize date arguments (handles positional <-> --date/--start/--end mapping)
+    normalize_date_args(args, parser)
+
     # Global reproducibility: seed must be set before any model code runs
     from utils.reproducibility import set_global_seed
 
     set_global_seed(args.seed, args.deterministic)
-
-    # Positional date shortcuts:
-    #   python main.py 2026-02-24                    → single day, default pipeline
-    #   python main.py 2026-02-24 2026-02-28          → range mode, default pipeline
-    if args.pos_date is not None:
-        if args.pos_end is not None:
-            # Two positionals → range mode
-            if args.start is not None or args.end is not None:
-                parser.error("Cannot use both positional dates and --start/--end")
-            if args.date is not None:
-                parser.error("Cannot use both positional dates and --date")
-            args.start = args.pos_date
-            args.end = args.pos_end
-            args.pipeline = "ledger_full_range"
-        else:
-            # Single positional → single day
-            if args.date is not None:
-                parser.error("Cannot use both positional date and --date")
-            args.date = args.pos_date
-
-    # Validate no ambiguous combinations
-    if args.pipeline == "ledger_full_range":
-        if not args.start or not args.end:
-            parser.error("ledger_full_range requires --start and --end (or two positional dates)")
-        if args.start > args.end:
-            parser.error(f"--start ({args.start}) > --end ({args.end})")
-    elif args.pipeline in ("ledger_full", "ledger_predict", "ledger_weight",
-                           "ledger_fuse", "ledger_classifier", "ledger_smoke"):
-        if not args.date:
-            parser.error(f"--pipeline {args.pipeline} requires --date (or positional date)")
-    elif args.pipeline == "ledger_backfill":
-        if not args.start or not args.end:
-            parser.error("ledger_backfill requires --start and --end")
 
     if args.pipeline == "evaluate":
         output_path = run_evaluate_pipeline(args)

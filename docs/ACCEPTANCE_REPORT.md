@@ -150,6 +150,23 @@ Verification: `python scripts/verify_range_pipeline.py --start 2026-02-24 --end 
 
 ## Known Issues / Remaining Risks
 
-- None identified at audit time.
-- Full pipeline run requires CUDA GPU and ~2-6 hours.
-- Smoke pipeline is the recommended lightweight alternative for quick verification.
+- Full CUDA pipeline has not been executed on this machine.
+- `ledger_full_range` full execution has not been validated with real GPU outputs.
+- `classifier_bridge` corrected_hours path requires runtime validation.
+- Range preflight is lightweight and does not replace `verify_final_pipeline` or `verify_range_pipeline`.
+- Final delivery remains pending until at least one full single-day run and one range run are validated on CUDA-capable hardware.
+
+## Final Decision
+
+**not ready for client delivery**
+
+This codebase is **ready for code review / CUDA validation**, not for client delivery.
+
+Exact blockers before upgrading to "ready for client delivery":
+
+1. Run `ledger_smoke` or full `ledger_full` on CUDA-capable machine
+2. Run `verify_final_pipeline` for a real day
+3. Run `ledger_full_range` for at least 2 consecutive days
+4. Run `verify_range_pipeline`
+5. Inspect `classifier_report.json` and confirm `corrected_hours` behavior
+6. Produce evidence (manifest paths, verify output summaries, commit hash)

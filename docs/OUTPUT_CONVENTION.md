@@ -129,9 +129,9 @@ outputs/runs/range_{YYYY-MM-DD}_to_{YYYY-MM-DD}/
 ### `range_summary.csv`
 
 ```
-date,status,submission_ready_exists,submission_ready_rows,errors_count,warnings_count
-2026-02-24,complete,True,24,0,0
-2026-02-25,complete,True,24,0,0
+date,status,submission_ready_exists,submission_ready_rows,errors_count,warnings_count,manifest_path,submission_ready_path
+2026-02-24,complete,True,24,0,0,outputs/runs/2026-02-24/run_manifest.json,outputs/runs/2026-02-24/final/submission_ready.csv
+2026-02-25,complete,True,24,0,0,outputs/runs/2026-02-25/run_manifest.json,outputs/runs/2026-02-25/final/submission_ready.csv
 ...
 ```
 

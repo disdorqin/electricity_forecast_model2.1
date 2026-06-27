@@ -204,15 +204,15 @@ def _run_extreme_price_classifier(
                 result["corrected_df"] = corrected_df
 
                 # Count corrections via bridge result or compute
-                corrections = classifier_result.get("n_corrections", 0)
+                corrections = clf_result.get("n_corrections", 0)
                 if corrections == 0 and "y_fused" in fused_df.columns and "y_fused_corrected" in corrected_df.columns:
                     corrections = int(
                         (fused_df["y_fused"].values != corrected_df["y_fused_corrected"].values).sum()
                     )
                 result["n_corrections"] = corrections
 
-                # Build corrected_hours
-                corrected_hours = classifier_result.get("corrected_hours", [])
+                # Build corrected_hours from bridge result or compute
+                corrected_hours = clf_result.get("corrected_hours", [])
                 if not corrected_hours and corrections > 0 and "y_fused" in fused_df.columns and "y_fused_corrected" in corrected_df.columns:
                     corrected_hours = _build_corrected_hours(fused_df, corrected_df)
                 result["corrected_hours"] = corrected_hours or []

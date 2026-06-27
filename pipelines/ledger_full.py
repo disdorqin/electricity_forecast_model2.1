@@ -135,13 +135,39 @@ def run_ledger_full(args: Any) -> dict:
     # Stage 4: ledger_classifier
     # -----------------------------------------------------------------------
     logger.info(f"\n{'='*60}\nStage 4/5: ledger_classifier\n{'='*60}")
+    strict_clf = getattr(args, "strict_classifier", False)
     try:
         from pipelines.ledger_classifier import run_ledger_classifier
         clf_result = run_ledger_classifier(args)
         manifest["stages"]["ledger_classifier"] = clf_result
+
+        clf_status = clf_result.get("status")
+        if clf_status == "failed":
+            manifest["errors"].append("ledger_classifier failed")
+            if strict_clf:
+                manifest["status"] = "failed"
+                manifest["completed_at"] = datetime.now(timezone.utc).isoformat()
+                _write_manifest(runs_root, target_date, manifest)
+                return manifest
+        else:
+            # Propagate classifier warnings/errors to top-level manifest
+            for w in clf_result.get("warnings", []):
+                manifest["warnings"].append(f"ledger_classifier: {w}")
+            for e in clf_result.get("errors", []):
+                if strict_clf:
+                    manifest["errors"].append(f"ledger_classifier: {e}")
+                else:
+                    manifest["warnings"].append(f"ledger_classifier: {e}")
     except Exception as e:
         manifest["stages"]["ledger_classifier"] = {"status": "error", "error": str(e)}
-        manifest["warnings"].append(f"ledger_classifier: {e}")
+        if strict_clf:
+            manifest["errors"].append(f"ledger_classifier: {e}")
+            manifest["status"] = "failed"
+            manifest["completed_at"] = datetime.now(timezone.utc).isoformat()
+            _write_manifest(runs_root, target_date, manifest)
+            return manifest
+        else:
+            manifest["warnings"].append(f"ledger_classifier: {e}")
 
     # -----------------------------------------------------------------------
     # Stage 5: Final outputs
