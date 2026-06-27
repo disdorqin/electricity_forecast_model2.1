@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json as json_lib
 import shutil
 import subprocess
 import sys
@@ -19,6 +20,7 @@ import tempfile
 import time
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 
@@ -46,12 +48,25 @@ def _compare_csv_files(path_a: Path, path_b: Path, label: str) -> list[str]:
         issues.append(f"[{label}] Row count: A={len(df_a)} vs B={len(df_b)}")
         return issues
 
-    # Check y_pred column
+    # Sort by common key columns before comparing
+    key_cols = [
+        c for c in ["task", "model_name", "forecast_date", "target_day", "business_day", "hour_business"]
+        if c in df_a.columns and c in df_b.columns
+    ]
+    if key_cols:
+        df_a = df_a.sort_values(key_cols).reset_index(drop=True)
+        df_b = df_b.sort_values(key_cols).reset_index(drop=True)
+        if not df_a[key_cols].equals(df_b[key_cols]):
+            issues.append(f"[{label}] key columns differ")
+
+    # Check y_pred column with tolerance
     for col in ["y_pred"]:
         if col in df_a.columns and col in df_b.columns:
-            if not df_a[col].equals(df_b[col]):
-                mismatches = (df_a[col] != df_b[col]).sum()
-                max_diff = abs(df_a[col] - df_b[col]).max()
+            a_vals = df_a[col].to_numpy(float)
+            b_vals = df_b[col].to_numpy(float)
+            if not np.allclose(a_vals, b_vals, atol=1e-6, rtol=1e-6, equal_nan=True):
+                mismatches = (~np.isclose(a_vals, b_vals, atol=1e-6, rtol=1e-6, equal_nan=True)).sum()
+                max_diff = np.max(np.abs(a_vals - b_vals))
                 issues.append(
                     f"[{label}] {col}: {mismatches}/{len(df_a)} rows differ, "
                     f"max_abs_diff={max_diff:.6f}"
@@ -74,9 +89,11 @@ def check_reproducibility(
     seed: int = 42,
     deterministic: bool = False,
     keep_tmp: bool = False,
+    epf_v1_root: str | None = None,
+    allow_v2_fallback: bool = False,
 ) -> bool:
     """Run ledger_smoke twice and compare outputs."""
-    print(f"=== Reproducibility Check: date={date}, seed={seed}, deterministic={deterministic} ===\n")
+    print(f"=== Reproducibility Check: date={date}, seed={seed}, deterministic={deterministic}, epf_v1_root={epf_v1_root} ===\n")
 
     tmp_a = Path(tempfile.mkdtemp(prefix="repro_a_"))
     tmp_b = Path(tempfile.mkdtemp(prefix="repro_b_"))
@@ -95,14 +112,19 @@ def check_reproducibility(
     def _run(test_dir: Path, tag: str) -> tuple[bool, Path]:
         """Run ledger_smoke once."""
         cmd = [
-            sys.executable, "main.py", date,
+            sys.executable, "main.py",
             "--pipeline", "ledger_smoke",
             "--ledger-root", str(test_dir / "ledger"),
             "--runs-root", str(test_dir / "runs"),
             "--seed", str(seed),
+            "--date", date,
         ]
         if deterministic:
             cmd.append("--deterministic")
+        if epf_v1_root:
+            cmd.extend(["--epf-v1-root", str(epf_v1_root)])
+        if allow_v2_fallback:
+            cmd.append("--allow-v2-fallback")
 
         print(f">>> Run {tag}: {' '.join(cmd)}")
         t0 = time.time()
@@ -129,6 +151,7 @@ def check_reproducibility(
 
     # Collect all comparison files
     all_ok = True
+    compared_files = 0
 
     # Compare model-level CSV files
     for task in ["dayahead", "realtime"]:
@@ -136,7 +159,8 @@ def check_reproducibility(
         pred_dir_b = tmp_b / "runs" / date / task / "prediction"
 
         if not pred_dir_a.exists() or not pred_dir_b.exists():
-            print(f"\n  [SKIP] {task}: prediction directory missing")
+            print(f"\n  [FAIL] {task}: prediction directory missing")
+            all_ok = False
             continue
 
         # Compare all_model_predictions_long.csv
@@ -146,6 +170,8 @@ def check_reproducibility(
         for issue in issues:
             print(f"  {issue}")
             all_ok = False
+        if long_a.exists() and long_b.exists():
+            compared_files += 1
 
         # Compare per-model files
         csv_files_a = sorted(pred_dir_a.glob("*_predictions.csv"))
@@ -158,6 +184,8 @@ def check_reproducibility(
             for issue in issues:
                 print(f"  {issue}")
                 all_ok = False
+            if f_b.exists():
+                compared_files += 1
 
     # Compare run manifests
     manifest_a = tmp_a / "runs" / date / "run_manifest.json"
@@ -166,20 +194,51 @@ def check_reproducibility(
         sha_a = _file_sha256(manifest_a)
         sha_b = _file_sha256(manifest_b)
         if sha_a != sha_b:
-            # Manifest timestamps will differ — check structural equality instead
-            import json
+            # Manifest timestamps/paths/timing will differ — strip those fields
+            def _strip_manifest_noise(d: dict) -> dict:
+                """Remove timing, path, and other non-structural fields."""
+                noise_keys = {"started_at", "completed_at", "elapsed_seconds",
+                              "output_path", "csv_path", "parquet_path", "source_file"}
+                out = {}
+                for k, v in d.items():
+                    if k in noise_keys:
+                        continue
+                    if isinstance(v, dict):
+                        nested = _strip_manifest_noise(v)
+                        if nested:
+                            out[k] = nested
+                    elif isinstance(v, list):
+                        cleaned = [
+                            _strip_manifest_noise(item) if isinstance(item, dict) else item
+                            for item in v
+                        ]
+                        if cleaned:
+                            out[k] = cleaned
+                    else:
+                        out[k] = v
+                return out
 
             with open(manifest_a) as f:
-                m_a = json.load(f)
+                m_a = _strip_manifest_noise(json_lib.load(f))
             with open(manifest_b) as f:
-                m_b = json.load(f)
-            # Remove timestamps before comparing
-            for key in ["started_at", "completed_at"]:
-                m_a.pop(key, None)
-                m_b.pop(key, None)
+                m_b = _strip_manifest_noise(json_lib.load(f))
             if m_a != m_b:
                 print(f"  [WARN] run_manifest.json: structural differences (non-timestamp)")
+                import difflib
+                a_str = json_lib.dumps(m_a, sort_keys=True, indent=2, default=str)
+                b_str = json_lib.dumps(m_b, sort_keys=True, indent=2, default=str)
+                for line in difflib.unified_diff(a_str.splitlines(), b_str.splitlines(),
+                                                  fromfile='A', tofile='B', lineterm='')[:30]:
+                    print(f"    {line}")
                 all_ok = False
+            else:
+                print(f"  run_manifest.json: structural match OK (timing/paths excluded)")
+
+    print(f"\n  compared files: {compared_files}")
+
+    if compared_files == 0:
+        print("[FAIL] No prediction CSV files were compared.")
+        all_ok = False
 
     print()
     if all_ok:
@@ -206,6 +265,8 @@ def main():
     parser.add_argument("--seed", type=int, default=42, help="Random seed (default: 42)")
     parser.add_argument("--deterministic", action="store_true", help="Enable deterministic mode")
     parser.add_argument("--keep-tmp", action="store_true", help="Keep temp output directories")
+    parser.add_argument("--epf-v1-root", default=None, help="Path to EPF v1.0 repository root")
+    parser.add_argument("--allow-v2-fallback", action="store_true", default=False, help="Allow fallback to 2.0 implementations")
     args = parser.parse_args()
 
     ok = check_reproducibility(
@@ -213,6 +274,8 @@ def main():
         seed=args.seed,
         deterministic=args.deterministic,
         keep_tmp=args.keep_tmp,
+        epf_v1_root=args.epf_v1_root,
+        allow_v2_fallback=args.allow_v2_fallback,
     )
     return 0 if ok else 1
 

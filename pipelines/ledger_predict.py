@@ -147,22 +147,30 @@ def run_ledger_predict(args: Any) -> dict:
             "patience": timemixer_patience,
             "batch_size": timemixer_batch_size,
             "full_refit": timemixer_full_refit,
-            "seed": timemixer_seeds,
+            "seed": seed,
+            "legacy_timemixer_seeds": timemixer_seeds,
+            "deterministic": deterministic,
         },
         "rt916": {
             "asof_hour": rt_cutoff_hour,
-            "amp_inference": False,
-            "export_dtype": "fp32",
+            "seed": seed,
+            "deterministic": deterministic,
         },
         "sgdfnet": {
             "decision_hour": rt_cutoff_hour,
+            "seed": seed,
+            "deterministic": deterministic,
         },
         "timesfm": {
             "device": "cpu",
             "epf_v1_mode": epf_v1_mode,
+            "seed": seed,
+            "deterministic": deterministic,
         },
         "lightgbm": {
             "epf_v1_mode": epf_v1_mode,
+            "seed": seed,
+            "deterministic": deterministic,
         },
     }
 

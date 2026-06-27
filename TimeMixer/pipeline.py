@@ -75,7 +75,7 @@ class ModelPipeline(BaseModelPipeline):
             raise ValueError(f"TimeMixer task={task_filter} filter yielded 0 rows for {predict_date.date()}")
         normalized = ensure_prediction_frame(filtered.rename(columns={"ds": "时刻"}), prediction_col)
 
-        # ---- TimeMixer output validation: 24 rows, hour_business 1..24 ----
+        # ---- TimeMixer output validation: 24 rows, hours D 01:00 ~ D+1 00:00 ----
         _validate_timemixer_output(normalized, predict_date, target)
 
         output_path = output_root / "predictions.csv"
@@ -105,40 +105,54 @@ class ModelPipeline(BaseModelPipeline):
 
 
 def _validate_timemixer_output(df: pd.DataFrame, predict_date: pd.Timestamp, target: str) -> None:
-    """Validate TimeMixer output: 24 rows, hour_business 1..24, no D 00:00."""
+    """Validate TimeMixer output using raw timestamp column.
+
+    Business day D must be:
+      D 01:00, D 02:00, ..., D 23:00, D+1 00:00
+    """
     issues: list[str] = []
 
     if len(df) != 24:
         issues.append(f"expected 24 rows, got {len(df)}")
 
+    ts_col = "时刻" if "时刻" in df.columns else ("ds" if "ds" in df.columns else None)
+    if ts_col is None:
+        issues.append(f"missing timestamp column, columns={list(df.columns)}")
+    else:
+        ts = pd.to_datetime(df[ts_col], errors="coerce").sort_values().reset_index(drop=True)
+        if ts.isna().any():
+            issues.append("timestamp contains NaT")
+
+        target_dt = pd.Timestamp(predict_date).normalize()
+        expected_start = target_dt + pd.Timedelta(hours=1)
+        expected_end = target_dt + pd.Timedelta(days=1)
+        expected_ts = pd.date_range(expected_start, expected_end, freq="h")
+
+        if len(ts) == 24:
+            if ts.iloc[0] != expected_start:
+                issues.append(f"first timestamp {ts.iloc[0]} != expected {expected_start}")
+            if ts.iloc[-1] != expected_end:
+                issues.append(f"last timestamp {ts.iloc[-1]} != expected {expected_end}")
+            if not ts.equals(pd.Series(expected_ts)):
+                missing = sorted(set(expected_ts) - set(ts))
+                extra = sorted(set(ts) - set(expected_ts))
+                if missing:
+                    issues.append(f"missing timestamps: {missing[:5]}")
+                if extra:
+                    issues.append(f"extra timestamps: {extra[:5]}")
+
+        if (ts == target_dt).any():
+            issues.append(f"TimeMixer incorrectly includes D 00:00: {target_dt}")
+
     if "hour_business" in df.columns:
         hours = sorted(df["hour_business"].dropna().astype(int).unique())
-        expected_hours = list(range(1, 25))
-        if hours != expected_hours:
-            missing = set(expected_hours) - set(hours)
-            extra = set(hours) - set(expected_hours)
-            if missing:
-                issues.append(f"missing hour_business: {sorted(missing)}")
-            if extra:
-                issues.append(f"extra hour_business: {sorted(extra)}")
-
-        # hour 24 must not map to predict_date 00:00
-        if "ds" in df.columns:
-            h24_rows = df[df["hour_business"] == 24]
-            if not h24_rows.empty:
-                ds_vals = pd.to_datetime(h24_rows["ds"]).dropna().unique()
-                target_dt = pd.Timestamp(predict_date.date())
-                for ds in ds_vals:
-                    if ds.hour == 0 and ds.date() == target_dt.date():
-                        issues.append(
-                            f"hour_business=24 ds={ds}: should be D+1 00:00, not D 00:00"
-                        )
-
-    if "hour_business" in df.columns and 0 in df["hour_business"].values:
-        issues.append("hour_business=0 found; should be 1..24 (with 24=mapping to 00:00 of D+1)")
+        if hours != list(range(1, 25)):
+            issues.append(f"hour_business must be 1..24, got {hours}")
+        if 0 in set(hours):
+            issues.append("hour_business=0 found")
 
     if issues:
         raise ValueError(
-            f"TimeMixer output validation FAILED for {target} {predict_date.date()}: "
-            f"{' | '.join(issues)}"
+            f"TimeMixer output validation FAILED for {target} {pd.Timestamp(predict_date).date()}: "
+            + " | ".join(str(x) for x in issues)
         )
