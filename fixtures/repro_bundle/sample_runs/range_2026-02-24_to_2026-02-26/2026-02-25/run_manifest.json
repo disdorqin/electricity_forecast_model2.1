@@ -1,0 +1,298 @@
+{
+  "pipeline": "ledger_full",
+  "target_date": "2026-02-25",
+  "started_at": "2026-06-28T09:12:55.309778+00:00",
+  "status": "complete",
+  "stages": {
+    "ledger_predict": {
+      "pipeline": "ledger_predict",
+      "target_date": "2026-02-25",
+      "realtime_cutoff_hour": 14,
+      "seed": 42,
+      "deterministic": false,
+      "epf_v1_mode": "exact",
+      "started_at": "2026-06-28T09:12:55.310778+00:00",
+      "status": "complete",
+      "results": {
+        "dayahead": {
+          "lightgbm": {
+            "status": "ok",
+            "output_path": "outputs\\_validation_tmp_20260628_165754\\runs\\2026-02-25\\dayahead\\prediction\\lightgbm_predictions.csv",
+            "elapsed_seconds": 0.0
+          },
+          "timesfm": {
+            "status": "ok",
+            "output_path": "outputs\\_validation_tmp_20260628_165754\\runs\\2026-02-25\\dayahead\\prediction\\timesfm_predictions.csv",
+            "elapsed_seconds": 0.0
+          },
+          "timemixer": {
+            "status": "ok",
+            "output_path": "outputs\\_validation_tmp_20260628_165754\\runs\\2026-02-25\\dayahead\\prediction\\timemixer_predictions.csv",
+            "elapsed_seconds": 80.77249459997984
+          }
+        },
+        "dayahead_long_rows": 72,
+        "realtime": {
+          "sgdfnet": {
+            "status": "ok",
+            "output_path": "outputs\\_validation_tmp_20260628_165754\\runs\\2026-02-25\\realtime\\prediction\\sgdfnet_predictions.csv",
+            "elapsed_seconds": 0.0
+          },
+          "timesfm": {
+            "status": "ok",
+            "output_path": "outputs\\_validation_tmp_20260628_165754\\runs\\2026-02-25\\realtime\\prediction\\timesfm_predictions.csv",
+            "elapsed_seconds": 0.0
+          },
+          "timemixer": {
+            "status": "ok",
+            "output_path": "outputs\\_validation_tmp_20260628_165754\\runs\\2026-02-25\\realtime\\prediction\\timemixer_predictions.csv",
+            "elapsed_seconds": 82.14969420002308
+          },
+          "rt916": {
+            "status": "ok",
+            "output_path": "outputs\\_validation_tmp_20260628_165754\\runs\\2026-02-25\\realtime\\prediction\\rt916_predictions.csv",
+            "elapsed_seconds": 218.40577220002888
+          }
+        },
+        "realtime_long_rows": 96,
+        "dayahead_ledger": {
+          "status": "ok",
+          "parquet_path": "outputs\\_validation_tmp_20260628_165754\\ledger\\dayahead\\prediction\\prediction_ledger.parquet",
+          "csv_path": "outputs\\_validation_tmp_20260628_165754\\ledger\\dayahead\\prediction\\prediction_ledger.csv",
+          "rows_before": 2304,
+          "rows_after": 2304,
+          "new_rows": 72,
+          "duplicates_removed": 72,
+          "duplicate_report": [
+            {
+              "duplicates_removed": 72,
+              "new_rows": 72,
+              "rows_before": 2304,
+              "rows_after": 2304
+            }
+          ]
+        },
+        "realtime_ledger": {
+          "status": "ok",
+          "parquet_path": "outputs\\_validation_tmp_20260628_165754\\ledger\\realtime\\prediction\\prediction_ledger.parquet",
+          "csv_path": "outputs\\_validation_tmp_20260628_165754\\ledger\\realtime\\prediction\\prediction_ledger.csv",
+          "rows_before": 3072,
+          "rows_after": 3072,
+          "new_rows": 96,
+          "duplicates_removed": 96,
+          "duplicate_report": [
+            {
+              "duplicates_removed": 96,
+              "new_rows": 96,
+              "rows_before": 3072,
+              "rows_after": 3072
+            }
+          ]
+        },
+        "dayahead_actual_ledger": {
+          "status": "ok",
+          "parquet_path": "outputs\\_validation_tmp_20260628_165754\\ledger\\dayahead\\actual\\actual_ledger.parquet",
+          "csv_path": "outputs\\_validation_tmp_20260628_165754\\ledger\\dayahead\\actual\\actual_ledger.csv",
+          "rows_before": 768,
+          "rows_after": 768
+        },
+        "realtime_actual_ledger": {
+          "status": "ok",
+          "parquet_path": "outputs\\_validation_tmp_20260628_165754\\ledger\\realtime\\actual\\actual_ledger.parquet",
+          "csv_path": "outputs\\_validation_tmp_20260628_165754\\ledger\\realtime\\actual\\actual_ledger.csv",
+          "rows_before": 768,
+          "rows_after": 768
+        }
+      },
+      "warnings": [],
+      "errors": [],
+      "data_cutoff_dayahead": "2026-02-24",
+      "data_cutoff_realtime": "2026-02-24 14:00:00",
+      "model_runtime_config": {
+        "timemixer": {
+          "cutoff_hour_rt": 14,
+          "epochs": 1,
+          "patience": 1,
+          "batch_size": 16,
+          "full_refit": true,
+          "seed": 42,
+          "legacy_timemixer_seeds": 42,
+          "deterministic": false
+        },
+        "rt916": {
+          "asof_hour": 14,
+          "seed": 42,
+          "deterministic": false
+        },
+        "sgdfnet": {
+          "decision_hour": 14,
+          "seed": 42,
+          "deterministic": false
+        },
+        "timesfm": {
+          "device": "cpu",
+          "epf_v1_mode": "exact",
+          "seed": 42,
+          "deterministic": false
+        },
+        "lightgbm": {
+          "epf_v1_mode": "exact",
+          "seed": 42,
+          "deterministic": false
+        }
+      },
+      "model_source": {
+        "lightgbm": "bundled:lightGBM/",
+        "timesfm": "bundled:TimesFMBackend/",
+        "timemixer": "bundled:TimeMixer/",
+        "sgdfnet": "bundled:SGDFNet/",
+        "rt916": "bundled:RT916_SpikeFusionNet/",
+        "external_epf_v1_root": null
+      },
+      "completed_at": "2026-06-28T09:19:20.571802+00:00"
+    },
+    "ledger_weight": {
+      "pipeline": "ledger_weight",
+      "target_date": "2026-02-25",
+      "window_start": "2026-01-26",
+      "window_end": "2026-02-24",
+      "window_days": 30,
+      "started_at": "2026-06-28T09:19:20.573304+00:00",
+      "status": "complete",
+      "results": {
+        "dayahead": {
+          "task": "dayahead",
+          "status": "complete",
+          "training_rows": 2160,
+          "training_days": 30,
+          "coverage": {
+            "total_expected": 2160,
+            "total_actual": 2160,
+            "expected_days": 30,
+            "actual_days": 30
+          },
+          "day_gate_min": 0.3,
+          "day_gate_max": 0.85,
+          "n_weights": 3,
+          "weight_dir": "outputs\\_validation_tmp_20260628_165754\\runs\\2026-02-25\\dayahead\\weight"
+        },
+        "realtime": {
+          "task": "realtime",
+          "status": "complete",
+          "training_rows": 2880,
+          "training_days": 30,
+          "coverage": {
+            "total_expected": 2880,
+            "total_actual": 2880,
+            "expected_days": 30,
+            "actual_days": 30
+          },
+          "day_gate_min": 0.3,
+          "day_gate_max": 0.85,
+          "n_weights": 3,
+          "weight_dir": "outputs\\_validation_tmp_20260628_165754\\runs\\2026-02-25\\realtime\\weight"
+        }
+      },
+      "warnings": [],
+      "errors": [],
+      "ledger_window_check": {
+        "status": "PASS",
+        "target_date": "2026-02-25",
+        "window_start": "2026-01-26",
+        "window_end": "2026-02-24",
+        "errors": [],
+        "warnings": [],
+        "summary": {
+          "dayahead_prediction_expected_rows": 2160,
+          "realtime_prediction_expected_rows": 2880,
+          "dayahead_actual_expected_rows": 720,
+          "realtime_actual_expected_rows": 720,
+          "dayahead_prediction_actual_rows": 2304,
+          "realtime_prediction_actual_rows": 3072,
+          "dayahead_actual_actual_rows": 768,
+          "realtime_actual_actual_rows": 768
+        },
+        "missing": []
+      },
+      "completed_at": "2026-06-28T09:19:21.178457+00:00"
+    },
+    "ledger_fuse": {
+      "pipeline": "ledger_fuse",
+      "target_date": "2026-02-25",
+      "started_at": "2026-06-28T09:19:21.241086+00:00",
+      "status": "complete",
+      "results": {
+        "dayahead": {
+          "task": "dayahead",
+          "status": "complete",
+          "fused_rows": 24,
+          "fuse_dir": "outputs\\_validation_tmp_20260628_165754\\runs\\2026-02-25\\dayahead\\fuse"
+        },
+        "realtime": {
+          "task": "realtime",
+          "status": "complete",
+          "fused_rows": 24,
+          "fuse_dir": "outputs\\_validation_tmp_20260628_165754\\runs\\2026-02-25\\realtime\\fuse"
+        }
+      },
+      "warnings": [],
+      "errors": [],
+      "completed_at": "2026-06-28T09:19:21.268957+00:00"
+    },
+    "ledger_classifier": {
+      "pipeline": "ledger_classifier",
+      "target_date": "2026-02-25",
+      "started_at": "2026-06-28T09:19:21.280816+00:00",
+      "status": "complete",
+      "results": {
+        "uncorrected_rows": 24,
+        "corrected_rows": 24,
+        "corrections_applied": 5,
+        "corrected_hours": 9
+      },
+      "warnings": [],
+      "errors": [],
+      "completed_at": "2026-06-28T09:19:35.024102+00:00"
+    },
+    "final_outputs": {
+      "status": "complete",
+      "dayahead_final_rows": 24,
+      "realtime_final_rows": 24,
+      "realtime_corrected_rows": 24,
+      "submission_ready_rows": 24
+    }
+  },
+  "warnings": [],
+  "errors": [],
+  "completed_at": "2026-06-28T09:19:35.074981+00:00",
+  "postflight": {
+    "status": "PASS",
+    "errors": [],
+    "warnings": [],
+    "submission_ready_path": "outputs\\_validation_tmp_20260628_165754\\runs\\2026-02-25\\final\\submission_ready.csv",
+    "manifest_path": "outputs\\_validation_tmp_20260628_165754\\runs\\2026-02-25\\run_manifest.json"
+  },
+  "delivery_status": "NORMAL",
+  "fallback": {
+    "fallback_used": false
+  },
+  "next_day_readiness": {
+    "status": "PASS",
+    "target_date": "2026-02-26",
+    "window_start": "2026-01-27",
+    "window_end": "2026-02-25",
+    "errors": [],
+    "warnings": [],
+    "summary": {
+      "dayahead_prediction_expected_rows": 2160,
+      "realtime_prediction_expected_rows": 2880,
+      "dayahead_actual_expected_rows": 720,
+      "realtime_actual_expected_rows": 720,
+      "dayahead_prediction_actual_rows": 2304,
+      "realtime_prediction_actual_rows": 3072,
+      "dayahead_actual_actual_rows": 768,
+      "realtime_actual_actual_rows": 768
+    },
+    "missing": []
+  }
+}

@@ -1,4 +1,7 @@
-# FINAL CUDA ACCEPTANCE REPORT
+# FINAL CUDA ACCEPTANCE REPORT (Superseded)
+
+> **This report is superseded by [`FINAL_VALIDATION_SUMMARY.md`](FINAL_VALIDATION_SUMMARY.md).**
+> Retained for historical reference only. Several items noted here (e.g. "no hard coverage gate") have been resolved in the final delivery. Do not use as current acceptance criteria.
 
 ## Audit Date
 

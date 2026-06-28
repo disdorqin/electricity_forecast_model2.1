@@ -1,4 +1,7 @@
-# Acceptance Report
+# Acceptance Report (Superseded)
+
+> **This report is superseded by [`FINAL_VALIDATION_SUMMARY.md`](FINAL_VALIDATION_SUMMARY.md).**
+> Retained for historical reference only. Do not use as current acceptance criteria.
 
 ## Audit Date
 

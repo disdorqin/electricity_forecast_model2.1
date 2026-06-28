@@ -1,0 +1,81 @@
+{
+  "pipeline": "ledger_full_range",
+  "start_date": "2026-02-24",
+  "end_date": "2026-02-26",
+  "total_days": 3,
+  "completed_days": 3,
+  "failed_days": 0,
+  "skipped_days": 0,
+  "degraded_days": 0,
+  "status": "complete",
+  "delivery_status": "NORMAL",
+  "daily_results": [
+    {
+      "date": "2026-02-24",
+      "status": "complete",
+      "delivery_status": "NORMAL",
+      "postflight_status": "PASS",
+      "fallback_used": false,
+      "started_at": "2026-06-28T09:06:16.729572+00:00",
+      "completed_at": "2026-06-28T09:12:55.206448+00:00",
+      "duration_seconds": 398.6,
+      "manifest_path": "outputs\\_validation_tmp_20260628_165754\\runs\\2026-02-24\\run_manifest.json",
+      "submission_ready_path": "outputs\\_validation_tmp_20260628_165754\\runs\\2026-02-24\\final\\submission_ready.csv",
+      "stage_statuses": {
+        "ledger_predict": "complete",
+        "ledger_weight": "complete",
+        "ledger_fuse": "complete",
+        "ledger_classifier": "complete",
+        "final_outputs": "complete"
+      },
+      "errors_count": 0,
+      "warnings_count": 0
+    },
+    {
+      "date": "2026-02-25",
+      "status": "complete",
+      "delivery_status": "NORMAL",
+      "postflight_status": "PASS",
+      "fallback_used": false,
+      "started_at": "2026-06-28T09:12:55.309778+00:00",
+      "completed_at": "2026-06-28T09:19:35.074981+00:00",
+      "duration_seconds": 399.9,
+      "manifest_path": "outputs\\_validation_tmp_20260628_165754\\runs\\2026-02-25\\run_manifest.json",
+      "submission_ready_path": "outputs\\_validation_tmp_20260628_165754\\runs\\2026-02-25\\final\\submission_ready.csv",
+      "stage_statuses": {
+        "ledger_predict": "complete",
+        "ledger_weight": "complete",
+        "ledger_fuse": "complete",
+        "ledger_classifier": "complete",
+        "final_outputs": "complete"
+      },
+      "errors_count": 0,
+      "warnings_count": 0
+    },
+    {
+      "date": "2026-02-26",
+      "status": "complete",
+      "delivery_status": "NORMAL",
+      "postflight_status": "PASS",
+      "fallback_used": false,
+      "started_at": "2026-06-28T09:19:35.184881+00:00",
+      "completed_at": "2026-06-28T09:26:13.186824+00:00",
+      "duration_seconds": 398.1,
+      "manifest_path": "outputs\\_validation_tmp_20260628_165754\\runs\\2026-02-26\\run_manifest.json",
+      "submission_ready_path": "outputs\\_validation_tmp_20260628_165754\\runs\\2026-02-26\\final\\submission_ready.csv",
+      "stage_statuses": {
+        "ledger_predict": "complete",
+        "ledger_weight": "complete",
+        "ledger_fuse": "complete",
+        "ledger_classifier": "complete",
+        "final_outputs": "complete"
+      },
+      "errors_count": 0,
+      "warnings_count": 0
+    }
+  ],
+  "errors": [],
+  "warnings": [],
+  "started_at": "2026-06-28T09:06:16.597538+00:00",
+  "completed_at": "2026-06-28T09:26:13.297678+00:00"
+}
