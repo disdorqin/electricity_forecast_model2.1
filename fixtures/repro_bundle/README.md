@@ -18,11 +18,25 @@ fixtures/repro_bundle/
 │       ├── actual/actual_ledger.parquet
 │       └── actual/actual_ledger.csv
 └── sample_runs/                     # 验证通过的直接交付样例（非正式输出）
-    ├── 2026-02-26/                  # 单日完整链路样例
+    ├── 2026-02-24/                  # 单日完整陪跑输出（37 文件, 893K）
+    │   ├── run_manifest.json
+    │   ├── logs/pipeline.log
+    │   ├── dayahead/prediction/     # 3 模型预测
+    │   ├── dayahead/weight/         # BGEW 权重
+    │   ├── dayahead/fuse/           # 融合结果
+    │   ├── dayahead/final/
+    │   ├── realtime/prediction/     # 4 模型预测
+    │   ├── realtime/weight/         # BGEW 权重
+    │   ├── realtime/fuse/           # 融合结果
+    │   ├── realtime/final/          # 含分类器报告
+    │   └── final/submission_ready.csv
+    ├── 2026-02-25/                  # 单日完整陪跑输出（37 文件, 873K）
+    │   └── ... (结构与 2026-02-24 相同)
+    ├── 2026-02-26/                  # 单日验证归档（key artifacts + logs）
     │   ├── run_manifest.json
     │   ├── delivery_report.md
-    │   ├── submission_ready.csv
-    │   └── final/submission_ready.csv
+    │   ├── final/submission_ready.csv
+    │   └── logs/pipeline.log
     └── range_2026-02-24_to_2026-02-26/  # 三日 range 样例
         ├── 2026-02-24/
         ├── 2026-02-25/
