@@ -27,6 +27,27 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 
+def prepare_daily_run_dir(runs_root: Path, target_date: str, force: bool = False) -> Path:
+    """Prepare a clean daily run directory.
+
+    Creates the run directory if it doesn't exist. When ``force`` is True,
+    removes any existing content inside ``runs_root/{target_date}/`` first.
+
+    **Safety**: never touches ``outputs/ledger/``, ``outputs/runs/range_*``,
+    or any path outside the single-day run directory.
+    """
+    run_dir = runs_root / target_date
+    if force and run_dir.exists():
+        logger.info(f"Force mode: clearing existing run directory {run_dir}")
+        for child in run_dir.iterdir():
+            if child.is_dir():
+                shutil.rmtree(child)
+            else:
+                child.unlink()
+    run_dir.mkdir(parents=True, exist_ok=True)
+    return run_dir
+
+
 def run_ledger_full(args: Any) -> dict:
     """
     Main entry for --pipeline ledger_full.
@@ -49,6 +70,10 @@ def run_ledger_full(args: Any) -> dict:
     logger.info(f"=== ledger_full: {target_date} ===")
 
     runs_root = Path(getattr(args, "runs_root", "outputs/runs"))
+    force = getattr(args, "force", False)
+
+    # Prepare (or optionally clear) the run directory before starting
+    prepare_daily_run_dir(runs_root, target_date, force=force)
 
     manifest = {
         "pipeline": "ledger_full",

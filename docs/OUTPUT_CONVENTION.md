@@ -2,12 +2,40 @@
 
 ## Overview
 
-The pipeline generates two categories of outputs:
+The pipeline generates three categories of **formal outputs**:
 
 1. **Persistent ledger** (`outputs/ledger/`) — cross-date accumulated prediction and actual value storage
 2. **Daily run artifacts** (`outputs/runs/{date}/`) — per-date model predictions, weights, fused results, and final deliverables
+3. **Range summary** (`outputs/runs/range_{start}_to_{end}/`) — multi-day range pipeline manifest and summary CSV
 
-Both are under `outputs/` which is `.gitignore`d and never committed to Git.
+A fourth category is defined for testing:
+
+4. **Smoke test outputs** (`outputs/smoke/`) — lightweight test output, separate from production data
+
+All outputs live under `outputs/` which is `.gitignore`d and never committed to Git.
+
+### Formal vs. Non-formal Outputs
+
+**Formal outputs (part of the production ledger pipeline):**
+
+| Directory | Purpose |
+|-----------|---------|
+| `outputs/ledger/` | Cross-date accumulated prediction/actual ledger for weight learning |
+| `outputs/runs/YYYY-MM-DD/` | Single-day full pipeline output + submission_ready.csv |
+| `outputs/runs/range_*_to_*/` | Range pipeline manifest + summary |
+| `outputs/smoke/` | Smoke test prediction outputs (lightweight validation) |
+
+**All other directories under `outputs/` are local-only legacy, experimental, or debug artifacts.** If present on your machine, they may include:
+
+| Directory | Origin | Status |
+|-----------|--------|--------|
+| `outputs/2026-02-01` (direct date) | Old staging runs | Legacy — not part of ledger pipeline |
+| `outputs/unified_runs/` | EPF v2.0 unified output | Legacy — unused by ledger pipeline |
+| `outputs/audit_30day_*/` | `scripts/audit_30day_backfill.py` | Debug/audit artifact |
+| `outputs/repro_check/` | `scripts/check_reproducibility.py` | Debug/verification artifact |
+| `outputs/RT916_SpikeMarketLab/` | RT916 model debug output | Debug artifact — safe to delete |
+
+These can be safely ignored or deleted; they are not required by the ledger_full pipeline.
 
 ---
 
@@ -224,14 +252,20 @@ Classifier metadata:
 
 ---
 
-## Other Output Directories
+## Legacy / Debug Output Directories
 
-| Directory | Created by | Description |
-|-----------|-----------|-------------|
-| `outputs/smoke/` | `ledger_smoke` | Smoke test outputs (lightweight) |
-| `outputs/repro_check/` | `scripts/check_reproducibility.py` | Reproducibility verification artifacts |
-| `outputs/unified_runs/` | Old pipeline (legacy) | Old unified output format (unused) |
-| `outputs/audit_30day_*` | `scripts/audit_30day_backfill.py` | 30-day backfill audit report |
+These directories are **not formal outputs** of the ledger pipeline. They may appear on disk if you have run legacy pipelines, audit scripts, or debug tools:
+
+| Directory | Created by | Description | Formal? |
+|-----------|-----------|-------------|---------|
+| `outputs/smoke/` | `ledger_smoke` | Smoke test outputs (lightweight) | Test only |
+| `outputs/2026-02-01` (direct date) | Old staging runs | Legacy staging output | No |
+| `outputs/unified_runs/` | Old pipeline (legacy) | Old unified output format | No |
+| `outputs/repro_check/` | `scripts/check_reproducibility.py` | Reproducibility verification artifacts | No |
+| `outputs/audit_30day_*` | `scripts/audit_30day_backfill.py` | 30-day backfill audit report | No |
+| `outputs/RT916_SpikeMarketLab/` | RT916 model debug | RT916 daily joint debug output | No |
+
+Only `outputs/ledger/`, `outputs/runs/`, and `outputs/smoke/` are part of the formal ledger pipeline.
 
 ---
 
