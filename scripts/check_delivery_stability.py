@@ -635,6 +635,148 @@ def test_finalize_delivery_fallback_writes_manifest_before_second_postflight() -
     return ""
 
 
+def test_ledger_weight_gate_complete_window() -> str:
+    """Test 11: ledger_weight hard gate PASS when D-30..D-1 window is complete."""
+    from pipelines.ledger_weight import run_ledger_weight
+
+    with tempfile.TemporaryDirectory() as td:
+        ledger_root = Path(td) / "ledger"
+        runs_root = Path(td) / "runs"
+        target_date = "2026-02-24"
+
+        # Create complete synthetic ledgers for both tasks
+        for task in ["dayahead", "realtime"]:
+            _make_synthetic_ledger(ledger_root, target_date, task=task, is_prediction=True)
+            _make_synthetic_ledger(ledger_root, target_date, task=task, is_prediction=False)
+
+        # Create minimal run dir
+        (runs_root / target_date).mkdir(parents=True)
+
+        # Mock args for run_ledger_weight
+        args = argparse.Namespace(
+            date=target_date,
+            ledger_root=str(ledger_root),
+            runs_root=str(runs_root),
+            validation_days=30,
+            recent_week_boost=True,
+            recent_week_max_gate=0.85,
+            allow_missing_models=False,
+        )
+
+        result = run_ledger_weight(args)
+
+        # With complete window, run_ledger_weight should proceed
+        # It may fail at actual weight learning (no actual ML runtime) but
+        # the ledger validation gate must PASS (no "Ledger window validation FAILED")
+        gate_passed = any(
+            "Ledger window validation FAILED" not in str(e)
+            for e in result.get("errors", [])
+        ) if result.get("errors") else True
+
+        check(
+            "ledger_weight gate: complete window does not fail gate",
+            result.get("ledger_validation", {}).get("status") == "PASS",
+            f"expected PASS, got {result.get('ledger_validation', {}).get('status')}",
+        )
+    return ""
+
+
+def test_ledger_weight_gate_incomplete_window() -> str:
+    """Test 12: ledger_weight hard gate FAIL when D-30..D-1 window is incomplete."""
+    from pipelines.ledger_weight import run_ledger_weight
+
+    with tempfile.TemporaryDirectory() as td:
+        ledger_root = Path(td) / "ledger"
+        runs_root = Path(td) / "runs"
+        target_date = "2026-02-24"
+
+        # Create incomplete ledgers — only 5 days of realtime predictions
+        _make_synthetic_ledger(ledger_root, target_date, days=5, task="realtime", is_prediction=True)
+        _make_synthetic_ledger(ledger_root, target_date, days=30, task="realtime", is_prediction=False)
+
+        # Create minimal run dir
+        (runs_root / target_date).mkdir(parents=True)
+
+        # Mock args for run_ledger_weight
+        args = argparse.Namespace(
+            date=target_date,
+            ledger_root=str(ledger_root),
+            runs_root=str(runs_root),
+            validation_days=30,
+            recent_week_boost=True,
+            recent_week_max_gate=0.85,
+            allow_missing_models=False,
+        )
+
+        result = run_ledger_weight(args)
+
+        # With incomplete window and allow_missing=False, must fail at gate
+        gate_failed = result.get("ledger_validation", {}).get("status") == "FAIL"
+        has_gate_error = any(
+            "Ledger window validation FAILED" in str(e)
+            for e in result.get("errors", [])
+        )
+
+        check(
+            "ledger_weight gate: incomplete window fails fast",
+            gate_failed and has_gate_error,
+            f"expected FAIL gate, got ledger_validation={result.get('ledger_validation')}, "
+            f"errors={result.get('errors')[:2]}",
+        )
+
+        # Status must be 'failed'
+        check(
+            "ledger_weight gate: status is failed when window incomplete",
+            result.get("status") == "failed",
+            f"expected failed, got {result.get('status')}",
+        )
+    return ""
+
+
+def test_ledger_weight_gate_allow_missing() -> str:
+    """Test 13: ledger_weight gate is bypassed when allow_missing_models=True."""
+    from pipelines.ledger_weight import run_ledger_weight
+
+    with tempfile.TemporaryDirectory() as td:
+        ledger_root = Path(td) / "ledger"
+        runs_root = Path(td) / "runs"
+        target_date = "2026-02-24"
+
+        # Create incomplete ledgers — only 5 days of dayahead predictions
+        _make_synthetic_ledger(ledger_root, target_date, days=5, task="dayahead", is_prediction=True)
+        _make_synthetic_ledger(ledger_root, target_date, days=30, task="dayahead", is_prediction=False)
+
+        # Create minimal run dir
+        (runs_root / target_date).mkdir(parents=True)
+
+        # Mock args with allow_missing_models=True
+        args = argparse.Namespace(
+            date=target_date,
+            ledger_root=str(ledger_root),
+            runs_root=str(runs_root),
+            validation_days=30,
+            recent_week_boost=True,
+            recent_week_max_gate=0.85,
+            allow_missing_models=True,
+        )
+
+        result = run_ledger_weight(args)
+
+        # With allow_missing=True, the gate should add a warning but NOT fail
+        is_not_failed_from_gate = result.get("status") != "failed" or not any(
+            "Ledger window validation FAILED" in str(e)
+            for e in result.get("errors", [])
+        )
+
+        check(
+            "ledger_weight gate: allow_missing bypasses gate failure",
+            is_not_failed_from_gate,
+            f"expected non-failed or no gate error, got status={result.get('status')} "
+            f"errors={result.get('errors')[:2]}",
+        )
+    return ""
+
+
 def main() -> int:
     print("=" * 60)
     print("CHECK_DELIVERY_STABILITY")
@@ -650,6 +792,9 @@ def main() -> int:
     test_validate_degraded_manifest_with_errors_passes_when_allowed()
     test_fallback_business_hour_mapping()
     test_finalize_delivery_fallback_writes_manifest_before_second_postflight()
+    test_ledger_weight_gate_complete_window()
+    test_ledger_weight_gate_incomplete_window()
+    test_ledger_weight_gate_allow_missing()
 
     print()
 

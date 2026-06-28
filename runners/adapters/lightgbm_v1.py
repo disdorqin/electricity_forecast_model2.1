@@ -1,13 +1,13 @@
 """
-EPF v1.0 LightGBM Adapter
+LightGBM 1.0-compatible Adapter
 
-Wraps the best-performing LightGBM implementation from the EPF v1.0
-repository. The adapter adds `data_cutoff` enforcement and standardizes
-output to the ledger-compatible format.
+Wraps the best-performing LightGBM implementation (bundled lightGBM/)
+as a 1.0-compatible model. The adapter standardizes output to the
+ledger-compatible format.
 
 Usage:
     from runners.adapters.lightgbm_v1 import LightGBMV1Adapter
-    adapter = LightGBMV1Adapter()  # default: bundled lightGBM/, no external EPF root needed
+    adapter = LightGBMV1Adapter()  # default: bundled lightGBM/
     df = adapter.predict(target_date="2026-02-24", target="dayahead")
 """
 
@@ -30,16 +30,16 @@ logger = logging.getLogger(__name__)
 class LightGBMV1Adapter:
     """Adapter for LightGBM predictions.
 
-    Uses the bundled lightGBM/ implementation by default.
-    Optionally supports external EPF v1.0 root for legacy compatibility.
+    Uses the bundled lightGBM/ implementation by default in
+    1.0-compatible mode. Optionally supports external EPF v1.0 root
+    for legacy compatibility.
 
-    Mode "exact": faithful v1 behavior, no modifications.
-    Mode "cutoff_safe": truncates data to enforce cutoff safety.
+    v2.1 handles cutoff enforcement externally — the adapter always
+    passes data as-is (faithful 1.0-compatible behavior).
     """
 
-    def __init__(self, epf_root: str | None = None, mode: str = "exact"):
+    def __init__(self, epf_root: str | None = None):
         self.epf_root = Path(epf_root) if epf_root else None
-        self.mode = mode
         if self.epf_root and self.epf_root.exists():
             self._ensure_epf_on_path()
         elif self.epf_root:

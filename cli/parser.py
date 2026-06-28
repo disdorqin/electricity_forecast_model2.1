@@ -128,7 +128,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     # Ledger pipeline parameters
     parser.add_argument("--epf-v1-root", default=None, help="[Optional legacy compatibility] External EPF v1.0 root. Not required for normal ledger_full runs; local lightGBM/ and TimesFMBackend/ are used by default.")
-    parser.add_argument("--epf-v1-mode", default="exact", choices=["exact", "cutoff_safe"], help="EPF v1.0 adapter mode")
+    parser.add_argument("--epf-v1-mode", default="v1_compat", help=argparse.SUPPRESS)
     parser.add_argument("--allow-v2-fallback", action="store_true", default=False, help="Allow LightGBM/TimesFM to fall back to 2.0")
     parser.add_argument("--allow-missing-models", action="store_true", default=False, help="Continue even if some models fail")
     parser.add_argument("--allow-equal-weight-fallback", action="store_true", default=False, help="Use equal weights when no period weights available")

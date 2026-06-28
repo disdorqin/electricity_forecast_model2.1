@@ -30,6 +30,7 @@ from pipelines.prediction_ledger import (
     build_ledger_training_table,
     check_ledger_coverage,
 )
+from pipelines.delivery_quality import validate_ledger_window
 from fusion.learners.daily_ledger_gef import DailyLedgerGEF, GEFConfig
 
 logger = logging.getLogger(__name__)
@@ -85,6 +86,42 @@ def run_ledger_weight(args: Any) -> dict:
         "errors": [],
     }
 
+    # -----------------------------------------------------------------------
+    # P0: Hard gate — validate D-30..D-1 ledger window before learning weights
+    # -----------------------------------------------------------------------
+    logger.info(f"Validating D-{window_days}..D-1 ledger window before weight learning...")
+    ledger_validation = validate_ledger_window(target_date, ledger_root, days=window_days)
+    if ledger_validation["status"] != "PASS":
+        n_errors = len(ledger_validation["errors"])
+        err_msg = (
+            f"Ledger window validation FAILED for {target_date} "
+            f"({n_errors} error(s)). "
+            f"Weight learning requires complete D-{window_days}..D-1 ledger coverage. "
+            f"Run 'ledger_backfill' to fill gaps before retrying."
+        )
+        logger.error(err_msg)
+        if not allow_missing:
+            manifest["status"] = "failed"
+            manifest["errors"].append(err_msg)
+            manifest["ledger_validation"] = {
+                "status": "FAIL",
+                "n_errors": n_errors,
+                "errors": ledger_validation["errors"][:5],
+            }
+            manifest["completed_at"] = datetime.now(timezone.utc).isoformat()
+            _write_weight_manifest(runs_root, target_date, manifest)
+            return manifest
+        else:
+            manifest["warnings"].append(
+                f"Ledger window validation had {n_errors} error(s), "
+                f"continuing with allow_missing=True"
+            )
+
+    manifest["ledger_validation"] = {
+        "status": ledger_validation["status"],
+        "n_errors": 0,
+    }
+
     try:
         failed_tasks = []
         for task in ["dayahead", "realtime"]:
@@ -121,10 +158,14 @@ def run_ledger_weight(args: Any) -> dict:
         manifest["errors"].append(str(e))
         logger.exception(f"ledger_weight failed: {e}")
 
-    # Write manifest
+    _write_weight_manifest(runs_root, target_date, manifest)
+    return manifest
+
+
+def _write_weight_manifest(runs_root: Path, target_date: str, manifest: dict) -> None:
+    """Write or merge weight-stage results into run_manifest.json."""
     manifest_path = runs_root / target_date / "run_manifest.json"
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
-    # Merge with existing manifest if present
     if manifest_path.exists():
         with open(manifest_path, "r") as f:
             existing = json.load(f)
@@ -134,8 +175,6 @@ def run_ledger_weight(args: Any) -> dict:
     else:
         with open(manifest_path, "w") as f:
             json.dump(manifest, f, indent=2, ensure_ascii=False, default=str)
-
-    return manifest
 
 
 def _learn_weights_for_task(

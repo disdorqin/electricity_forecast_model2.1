@@ -1,5 +1,12 @@
 # FINAL CUDA ACCEPTANCE REPORT
 
+> **SUPERSEDED** by `FINAL_RISK_CLOSURE_REPORT.md`
+>
+> This report covers the CUDA full-run acceptance from 2026-06-28.
+> The Final Risk Closure Patch (2026-06-28 v2) resolves all P0/P1/P2
+> items identified in the "Remaining Risks" section below. See the
+> closure report for the complete picture.
+
 ## Audit Date
 
 2026-06-28

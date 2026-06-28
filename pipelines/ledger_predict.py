@@ -73,7 +73,6 @@ def run_ledger_predict(args: Any) -> dict:
     data_path = args.data_path
     epf_root = getattr(args, "epf_v1_root", None)
     allow_v2_fb = getattr(args, "allow_v2_fallback", False)
-    epf_v1_mode = getattr(args, "epf_v1_mode", "exact")
     ledger_root = Path(getattr(args, "ledger_root", "outputs/ledger"))
     runs_root = Path(getattr(args, "runs_root", "outputs/runs"))
     max_cpu = getattr(args, "max_cpu_workers", 2)
@@ -132,7 +131,6 @@ def run_ledger_predict(args: Any) -> dict:
         "realtime_cutoff_hour": rt_cutoff_hour,
         "seed": seed,
         "deterministic": deterministic,
-        "epf_v1_mode": epf_v1_mode,
         "started_at": datetime.now(timezone.utc).isoformat(),
         "status": "running",
         "results": {},
@@ -170,12 +168,12 @@ def run_ledger_predict(args: Any) -> dict:
         },
         "timesfm": {
             "device": "cpu",
-            "epf_v1_mode": epf_v1_mode,
+            "model_version": "v1_compat",
             "seed": seed,
             "deterministic": deterministic,
         },
         "lightgbm": {
-            "epf_v1_mode": epf_v1_mode,
+            "model_version": "v1_compat",
             "seed": seed,
             "deterministic": deterministic,
         },
@@ -199,7 +197,6 @@ def run_ledger_predict(args: Any) -> dict:
             data_path=data_path,
             epf_root=epf_root,
             allow_v2_fallback=allow_v2_fb,
-            epf_v1_mode=epf_v1_mode,
             cutoff_date=da_cutoff_date,
             realtime_cutoff_hour=rt_cutoff_hour,
             training_months=training_months,
@@ -230,7 +227,6 @@ def run_ledger_predict(args: Any) -> dict:
             data_path=data_path,
             epf_root=epf_root,
             allow_v2_fallback=allow_v2_fb,
-            epf_v1_mode=epf_v1_mode,
             cutoff_date=rt_cutoff_date,
             realtime_cutoff_hour=rt_cutoff_hour,
             training_months=training_months,
@@ -288,7 +284,6 @@ def _run_model_set(
     data_path: str,
     epf_root: Optional[str],
     allow_v2_fallback: bool,
-    epf_v1_mode: str,
     cutoff_date: str,
     realtime_cutoff_hour: int,
     training_months: int = 12,
@@ -347,7 +342,6 @@ def _run_model_set(
                 "data_path": data_path,
                 "epf_root": epf_root,
                 "allow_v2_fallback": allow_v2_fallback,
-                "epf_v1_mode": epf_v1_mode,
                 "cutoff_date": cutoff_date,
                 "realtime_cutoff_hour": realtime_cutoff_hour,
                 "training_months": training_months,
@@ -399,7 +393,6 @@ def _predict_model(
     data_path: str,
     epf_root: Optional[str],
     allow_v2_fallback: bool,
-    epf_v1_mode: str,
     cutoff_date: str,
     realtime_cutoff_hour: int,
     training_months: int = 12,
@@ -420,9 +413,9 @@ def _predict_model(
     logger.info(f"Predicting: {model_name}/{task} on {target_date}")
 
     if model_name == "lightgbm":
-        df = _predict_lightgbm(task, target_date, data_path, epf_root, allow_v2_fallback, epf_v1_mode, cutoff_date, seed=seed, deterministic=deterministic)
+        df = _predict_lightgbm(task, target_date, data_path, epf_root, allow_v2_fallback, cutoff_date, seed=seed, deterministic=deterministic)
     elif model_name == "timesfm":
-        df = _predict_timesfm(task, target_date, data_path, epf_root, allow_v2_fallback, epf_v1_mode, cutoff_date, seed=seed, deterministic=deterministic)
+        df = _predict_timesfm(task, target_date, data_path, epf_root, allow_v2_fallback, cutoff_date, seed=seed, deterministic=deterministic)
     elif model_name == "timemixer":
         df = _predict_timemixer(
             task, target_date, data_path, cutoff_date,
@@ -475,14 +468,13 @@ def _predict_lightgbm(
     data_path: str,
     epf_root: Optional[str],
     allow_v2_fallback: bool,
-    epf_v1_mode: str,
     cutoff_date: str,
     seed: int = 42,
     deterministic: bool = False,
 ) -> pd.DataFrame:
     """LightGBM prediction via bundled adapter (local lightGBM/ by default)."""
     from runners.adapters.lightgbm_v1 import LightGBMV1Adapter
-    adapter = LightGBMV1Adapter(epf_root=epf_root, mode=epf_v1_mode)
+    adapter = LightGBMV1Adapter(epf_root=epf_root)
     return adapter.predict(
         target_date=target_date,
         target=task,
@@ -499,14 +491,13 @@ def _predict_timesfm(
     data_path: str,
     epf_root: Optional[str],
     allow_v2_fallback: bool,
-    epf_v1_mode: str,
     cutoff_date: str,
     seed: int = 42,
     deterministic: bool = False,
 ) -> pd.DataFrame:
     """TimesFM prediction via bundled adapter (local TimesFMBackend/ by default)."""
     from runners.adapters.timesfm_v1 import TimesFMV1Adapter
-    adapter = TimesFMV1Adapter(epf_root=epf_root, mode=epf_v1_mode)
+    adapter = TimesFMV1Adapter(epf_root=epf_root)
     return adapter.predict(
         target_date=target_date,
         target=task,

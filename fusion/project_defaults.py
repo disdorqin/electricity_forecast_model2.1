@@ -1,14 +1,15 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 ASSETS_ROOT = PROJECT_ROOT.parent
-EPF_ROOT = ASSETS_ROOT / "epf"
 LOCAL_DATA_ROOT = PROJECT_ROOT / "data"
 CWD_DATA_ROOT = Path.cwd() / "data"
+LEGACY_EPF_ROOT = Path(os.environ.get("LEGACY_EPF_ROOT", "")) if os.environ.get("LEGACY_EPF_ROOT") else None
 MERGED_DA_SOURCE_ROOT = Path.cwd() / "tmp_merged_dayahead_sources"
 
 
@@ -30,17 +31,17 @@ def _pick_existing_dir(*candidates: Path) -> Path:
 class ProjectPaths:
     project_root: Path = PROJECT_ROOT
     assets_root: Path = ASSETS_ROOT
-    epf_root: Path = EPF_ROOT
-    # Prefer current-worktree data first, then the project-local folder, then epf.
+    legacy_epf_root: Path | None = LEGACY_EPF_ROOT
+    # Prefer current-worktree data first, then the project-local folder.
+    # Legacy EPF root (set via LEGACY_EPF_ROOT env var) is NOT included —
+    # the ledger pipeline uses --data-path explicitly.
     data_xlsx: Path = _pick_existing_path(
         CWD_DATA_ROOT / "shandong_pmos_hourly.xlsx",
         LOCAL_DATA_ROOT / "shandong_pmos_hourly.xlsx",
-        EPF_ROOT / "data" / "shandong_pmos_hourly.xlsx",
     )
     data_csv: Path = _pick_existing_path(
         CWD_DATA_ROOT / "shandong_pmos_hourly.csv",
         LOCAL_DATA_ROOT / "shandong_pmos_hourly.csv",
-        EPF_ROOT / "data" / "shandong_pmos_hourly.csv",
     )
     external_models_root: Path = ASSETS_ROOT / "models"
     fusion_runs_root: Path = PROJECT_ROOT / "fusion_runs"

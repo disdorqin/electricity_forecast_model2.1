@@ -1,12 +1,14 @@
 """
-EPF v1.0 TimesFM Adapter
+TimesFM 1.0-compatible Adapter
 
-Wraps the best-performing TimesFM implementation from the EPF v1.0
-repository. This is the SINGLE entry point for TimesFM in the ledger
-pipeline — no more circular calls between TF/ and TimesFM/ directories.
+Wraps the best-performing TimesFM implementation (bundled TimesFMBackend/)
+as a 1.0-compatible model. This is the SINGLE entry point for TimesFM in
+the ledger pipeline — no more circular calls between TF/ and TimesFM/
+directories.
 
-Supports cutoff-safe prediction by constructing temporary truncated
-data files when the original script doesn't support data_cutoff.
+The adapter runs in 1.0-compatible mode by default, using the bundled
+TimesFMBackend/ implementation. No mode selection is needed — v2.1
+handles orchestration and cutoff enforcement externally.
 """
 
 from __future__ import annotations
@@ -29,20 +31,19 @@ logger = logging.getLogger(__name__)
 class TimesFMV1Adapter:
     """Adapter for TimesFM predictions.
 
-    Uses the bundled TimesFMBackend/ implementation by default.
-    Optionally supports external EPF v1.0 root for legacy compatibility.
+    Uses the bundled TimesFMBackend/ implementation by default in
+    1.0-compatible mode. Optionally supports external EPF v1.0 root
+    for legacy compatibility.
 
     This is the canonical TimesFM wrapper for the ledger pipeline.
     No other wrapper should call TimesFM directly.
 
-    Mode "exact": faithful v1 behavior, no data truncation.
-    Mode "cutoff_safe": truncates data to enforce cutoff safety
-                        (only enabled when explicitly requested).
+    v2.1 handles cutoff enforcement externally — the adapter always
+    passes data as-is (faithful 1.0-compatible behavior).
     """
 
-    def __init__(self, epf_root: str | None = None, mode: str = "exact"):
+    def __init__(self, epf_root: str | None = None):
         self.epf_root = Path(epf_root) if epf_root else None
-        self.mode = mode
         if self.epf_root and self.epf_root.exists():
             self._ensure_epf_on_path()
         elif self.epf_root:
@@ -101,18 +102,13 @@ class TimesFMV1Adapter:
             data_path = self._find_data_file()
 
         logger.info(
-            f"TimesFM v1 [{self.mode}]: predicting {target_date} ({target}), "
+            f"TimesFM v1 [1.0-compatible]: predicting {target_date} ({target}), "
             f"cutoff={cutoff_date}"
         )
 
-        # Enforce cutoff safety: only when mode=cutoff_safe
-        if self.mode == "cutoff_safe":
-            safe_data_path = self._ensure_cutoff_safe_data(
-                data_path, cutoff_date, target_date
-            )
-        else:
-            # exact mode: pass data as-is, faithful to v1 behavior
-            safe_data_path = data_path
+        # 1.0-compatible mode: pass data as-is, faithful to v1 behavior.
+        # cutoff enforcement is handled externally by the ledger pipeline.
+        safe_data_path = data_path
 
         try:
             from TimesFMBackend.infer import predict_price_for_date

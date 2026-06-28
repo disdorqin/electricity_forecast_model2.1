@@ -217,7 +217,15 @@ def try_emergency_fallback(
 
     logger.info(f"Fallback report -> {fb_json_path}")
 
-    return _fallback_result(True, warnings, errors, reason)
+    return _fallback_result(
+        success=True,
+        warnings=warnings,
+        errors=errors,
+        reason=reason,
+        output_path=str(sub_path),
+        fallback_report_json=str(fb_json_path),
+        fallback_report_md=str(fb_md_path),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -355,13 +363,18 @@ def _fallback_result(
     warnings: list[str],
     errors: list[str],
     reason: str,
+    output_path: str = "",
+    fallback_report_json: str = "",
+    fallback_report_md: str = "",
 ) -> dict:
     return {
         "success": success,
         "fallback_method": "historical_same_hour_median",
         "fallback_level": "emergency_baseline" if success else "failed",
         "reason": reason,
-        "output_path": "",
+        "output_path": output_path,
+        "fallback_report_json": fallback_report_json,
+        "fallback_report_md": fallback_report_md,
         "warnings": warnings,
         "errors": errors,
     }
