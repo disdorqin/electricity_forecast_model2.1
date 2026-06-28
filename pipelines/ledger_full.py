@@ -269,11 +269,8 @@ def _finalize_delivery(args: Any, manifest: dict) -> dict:
         )
 
         if fallback_result["success"]:
-            # Re-validate after fallback (allow_degraded=True — manifest has errors)
-            second_postflight = validate_daily_submission(
-                runs_root, target_date, allow_degraded=True,
-            )
-            manifest["postflight"] = second_postflight
+            # 1. Set delivery_status & fallback BEFORE writing/validating
+            manifest["delivery_status"] = "DEGRADED_DELIVERED"
             manifest["fallback"] = {
                 "fallback_used": True,
                 "fallback_method": fallback_result["fallback_method"],
@@ -281,10 +278,17 @@ def _finalize_delivery(args: Any, manifest: dict) -> dict:
                 "reason": fb_reason,
                 "report": fallback_result,
             }
-            manifest["delivery_status"] = (
-                "DEGRADED_DELIVERED" if second_postflight["status"] == "PASS"
-                else "FAILED_NO_DELIVERY"
+            # 2. Write manifest so validate_daily_submission reads updates
+            _write_manifest(runs_root, target_date, manifest)
+            # 3. Re-validate (manifest now has DEGRADED_DELIVERED + fallback)
+            second_postflight = validate_daily_submission(
+                runs_root, target_date, allow_degraded=True,
             )
+            manifest["postflight"] = second_postflight
+            # 4. If second postflight fails, downgrade & re-write
+            if second_postflight["status"] != "PASS":
+                manifest["delivery_status"] = "FAILED_NO_DELIVERY"
+                _write_manifest(runs_root, target_date, manifest)
         else:
             manifest["delivery_status"] = "FAILED_NO_DELIVERY"
             manifest["fallback"] = {

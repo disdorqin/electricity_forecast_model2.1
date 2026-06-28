@@ -14,6 +14,7 @@ Tests:
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import sys
@@ -520,6 +521,120 @@ def test_fallback_business_hour_mapping() -> str:
     return ""
 
 
+def test_finalize_delivery_fallback_writes_manifest_before_second_postflight() -> str:
+    """Test 10: _finalize_delivery sets delivery_status + writes manifest BEFORE
+    calling validate_daily_submission the second time (so postflight reads
+    DEGRADED_DELIVERED + fallback on disk, not stale manifest)."""
+    from pipelines.ledger_full import _finalize_delivery
+
+    with tempfile.TemporaryDirectory() as td:
+        runs_root = Path(td)
+        target_date = "2026-02-24"
+
+        # Create synthetic history.csv
+        data_path = Path(td) / "history.csv"
+        rows = []
+        for day_offset in range(1, 41):
+            d = pd.Timestamp(target_date) - pd.Timedelta(days=day_offset)
+            for h in range(24):
+                ts = d + pd.Timedelta(hours=h)
+                rows.append({
+                    "ds": ts.strftime("%Y-%m-%d %H:%M:%S"),
+                    "日前电价": 100.0 + h,
+                    "实时电价": 90.0 + h,
+                })
+        pd.DataFrame(rows).to_csv(data_path, index=False)
+
+        # Prepare run directory
+        (runs_root / target_date).mkdir(parents=True)
+
+        # Build a manifest with errors + failed stage (simulating early failure)
+        manifest = {
+            "pipeline": "ledger_full",
+            "target_date": target_date,
+            "started_at": "2026-02-24T00:00:00",
+            "status": "running",
+            "stages": {
+                "ledger_predict": {"status": "complete"},
+                "ledger_weight": {"status": "failed", "error": "simulated failure"},
+                "ledger_fuse": {},
+                "ledger_classifier": {},
+                "final_outputs": {},
+            },
+            "warnings": [],
+            "errors": ["ledger_weight failed"],
+        }
+
+        # Mock args
+        args = argparse.Namespace(
+            runs_root=str(runs_root),
+            ledger_root=str(Path(td) / "ledger"),
+            data_path=str(data_path),
+        )
+
+        result = _finalize_delivery(args, manifest)
+
+        # Assertions
+        check(
+            "finalize_delivery: delivery_status is DEGRADED_DELIVERED",
+            result.get("delivery_status") == "DEGRADED_DELIVERED",
+            f"expected DEGRADED_DELIVERED, got {result.get('delivery_status')}",
+        )
+
+        sub_path = runs_root / target_date / "final" / "submission_ready.csv"
+        check(
+            "finalize_delivery: submission_ready.csv exists",
+            sub_path.exists(),
+            f"not found: {sub_path}",
+        )
+
+        fb_json = runs_root / target_date / "final" / "fallback_report.json"
+        check(
+            "finalize_delivery: fallback_report.json exists",
+            fb_json.exists(),
+            f"not found: {fb_json}",
+        )
+
+        dr_md = runs_root / target_date / "delivery_report.md"
+        check(
+            "finalize_delivery: delivery_report.md exists",
+            dr_md.exists(),
+            f"not found: {dr_md}",
+        )
+
+        # Verify run_manifest.json on disk has correct delivery_status
+        manifest_path = runs_root / target_date / "run_manifest.json"
+        if manifest_path.exists():
+            with open(manifest_path) as f:
+                disk_manifest = json.load(f)
+            check(
+                "finalize_delivery: disk manifest delivery_status",
+                disk_manifest.get("delivery_status") == "DEGRADED_DELIVERED",
+                f"expected DEGRADED_DELIVERED, got {disk_manifest.get('delivery_status')}",
+            )
+            disk_fb = disk_manifest.get("fallback", {})
+            check(
+                "finalize_delivery: disk manifest fallback.fallback_used",
+                disk_fb.get("fallback_used") is True,
+                f"expected True, got {disk_fb.get('fallback_used')}",
+            )
+        else:
+            check("finalize_delivery: run_manifest.json exists", False, "not found")
+
+        # Validate via delivery_quality with allow_degraded=True -> PASS
+        from pipelines.delivery_quality import validate_daily_submission
+        v_result = validate_daily_submission(
+            runs_root, target_date, allow_degraded=True,
+        )
+        check(
+            "finalize_delivery: validate_daily_submission(allow_degraded=True) PASS",
+            v_result["status"] == "PASS",
+            f"expected PASS, got {v_result['status']}: {v_result['errors'][:2]}",
+        )
+
+    return ""
+
+
 def main() -> int:
     print("=" * 60)
     print("CHECK_DELIVERY_STABILITY")
@@ -534,6 +649,7 @@ def main() -> int:
     test_exit_code_mapping()
     test_validate_degraded_manifest_with_errors_passes_when_allowed()
     test_fallback_business_hour_mapping()
+    test_finalize_delivery_fallback_writes_manifest_before_second_postflight()
 
     print()
 

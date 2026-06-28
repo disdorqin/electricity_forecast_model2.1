@@ -128,8 +128,10 @@ def try_emergency_fallback(
 
     # ---------------------------------------------------------------
     # 5. Filter to history < target_date (avoid future leakage)
+    #    Filter on business_day AFTER mapping so D's midnight
+    #    (→ D-1 hour 24) is correctly included as history.
     # ---------------------------------------------------------------
-    hist = df[df["_ts"] < target_dt].copy()
+    hist = df[df["business_day"] < target_date].copy()
     if hist.empty:
         errors.append(f"no historical data before {target_date}")
         return _fallback_result(False, warnings, errors, reason)
