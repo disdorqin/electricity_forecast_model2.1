@@ -1,4 +1,4 @@
-# Electricity Forecast Delivery Pipeline v2.1
+# Electricity Forecast Delivery Pipeline v2.5
 
 山东电力现货价格预测系统 — 多模型预测 + 30 天 Ledger 动态权重融合 + 极端价格分类校正。
 
