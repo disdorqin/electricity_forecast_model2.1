@@ -440,6 +440,288 @@ Ledger 是跨日期共享的累积账本：
 - **故障注入 4 例**：全部 PASS（stage failure → fallback ✓，缺数据 → FAILED ✓，空 ledger → hard gate ✓，坏 final → fallback ✓）
 - **False success：0**
 
+### 12. 常见问题与解决方法
+
+#### Q1: 为什么权重学习需要 30 天 ledger？
+
+**现象：** `ledger_weight` 报 "ledger window incomplete" 或 training coverage 不满足。
+
+**原因：**
+- `ledger_weight` 用 D-30..D-1 的模型预测和实际值拟合权重。
+- Dayahead 需要 30 × 3 × 24 = **2160 行** prediction rows。
+- Realtime 需要 30 × 4 × 24 = **2880 行** prediction rows。
+- actual 每个 task 需要 30 × 24 = **720 行**。
+- 权重学习**不**读 `outputs/runs`，而是读 `outputs/ledger`。
+
+**检查命令：**
+```bash
+python scripts/check_delivery_stability.py
+```
+
+**解决方法：** 复制 `fixtures/repro_bundle/ledger/` 到 `outputs/ledger/`，或运行完整 `ledger_backfill`。
+
+**是否需要重跑：** 是。补全 ledger 后重新运行整条链路。
+
+---
+
+#### Q2: 机器到底从哪里找 30 天数据？
+
+默认读取 `outputs/ledger`，具体文件：
+
+| 数据 | 路径 |
+|------|------|
+| Dayahead prediction | `outputs/ledger/dayahead/prediction/prediction_ledger.parquet` |
+| Dayahead actual | `outputs/ledger/dayahead/actual/actual_ledger.parquet` |
+| Realtime prediction | `outputs/ledger/realtime/prediction/prediction_ledger.parquet` |
+| Realtime actual | `outputs/ledger/realtime/actual/actual_ledger.parquet` |
+
+**自动初始化：** 如果 `outputs/ledger` 不存在且 `fixtures/repro_bundle/ledger/` 存在，首次运行会自动复制。
+
+**自定义路径：** 传 `--ledger-root YOUR_PATH` 则读取指定目录，不会自动从 fixtures 复制。
+
+---
+
+#### Q3: 为什么不提交完整 outputs/runs？
+
+`outputs/runs` 是每日中间产物和审计产物，原因如下：
+- 权重学习不直接从 runs 读取数据。
+- 全量 runs 体积大（400+ 文件，~5.6 MB），容易污染仓库。
+- 仓库只保留 `fixtures/repro_bundle/sample_runs/` 作为验证通过的样例。
+- 正式输出在本地 `outputs/runs/` 生成，`.gitignore` 已忽略此目录。
+
+**注意：** `outputs/runs/` 不提交不影响任何功能。首次运行前只需确保 `outputs/ledger/` 存在（自动从 fixtures 复制或 backfill 生成）。
+
+---
+
+#### Q4: `ledger_weight failed` 怎么办？
+
+**现象：**
+- 报 "ledger window incomplete"。
+- training coverage failed。
+- expected_rows 和 actual_rows 不一致。
+
+**检查命令：**
+```bash
+python scripts/check_delivery_stability.py
+```
+
+或直接调用 Python 检查：
+```python
+from pipelines.delivery_quality import validate_ledger_window
+print(validate_ledger_window("2026-02-26", "outputs/ledger"))
+```
+
+**解决方法：**
+1. 删除坏的 `outputs/ledger`，让程序自动从 fixtures bootstrap。
+2. 或手动复制 `fixtures/repro_bundle/ledger/` 到 `outputs/ledger/`。
+3. 或运行完整 backfill：`python main.py --pipeline ledger_backfill --start YYYY-MM-DD --end YYYY-MM-DD`。
+
+**是否需要重跑：** 是。
+
+---
+
+#### Q5: 第一次运行就报找不到 data 文件怎么办？
+
+**原因：** ledger 只负责权重训练窗口，当天的模型预测仍需要原始 Excel 数据。
+
+**检查命令：**
+```bash
+# Linux / macOS
+ls data/shandong_pmos_hourly.xlsx
+
+# Windows PowerShell
+Test-Path data/shandong_pmos_hourly.xlsx
+```
+
+**解决方法：**
+- 将数据文件放到 `data/shandong_pmos_hourly.xlsx`。
+- 或用 `--data-path /path/to/your/data.xlsx` 指定真实路径。
+- 如果数据不能公开，**不要**提交到 Git。
+
+**是否需要重跑：** 是。
+
+---
+
+#### Q6: 为什么有 seed ledger 还要 data？
+
+**原因：**
+- seed ledger 只用于历史权重学习（D-30..D-1）。
+- 今天 `ledger_predict` 仍要读取输入数据来训练/推理当天模型。
+- emergency fallback 也需要历史价格数据计算中位数。
+
+**结论：** data 和 ledger 是互补的，缺一不可。
+
+---
+
+#### Q7: Exit code 2 是不是成功？
+
+**不是 NORMAL。**
+
+- `exit code 2 = DEGRADED_DELIVERED`。
+- 有交付文件（`submission_ready.csv`），但来自 emergency fallback。
+- 需要查看 `fallback_report.md` / `fallback_report.json` 了解原因。
+- 修复问题后使用 `--force` 重跑。
+
+**是否可以提交：** 应急场景下可以，但需注明为 DEGRADED 状态，且后续应修复重跑。
+
+---
+
+#### Q8: `FAILED_NO_DELIVERY` 怎么办？
+
+**含义：** 正常链路失败，fallback 也失败，无任何交付文件。
+
+**常见原因：**
+- 输入数据缺失（data file 找不到或格式错误）。
+- 历史价格数据不足（fallback 所需的最少历史数据也不够）。
+- 输出目录不可写。
+- 关键依赖缺失（如 PyTorch / TimesFM 未正确安装）。
+
+**检查命令：** 查看 `run_manifest.json` 的 `errors` 列表和 `delivery_report.md`。
+
+**解决方法：** 根据 manifest 中的具体错误修复后 `--force` 重跑。
+
+---
+
+#### Q9: CUDA OOM 怎么办？
+
+**解决方法：**
+- 保持 `--max-gpu-workers 1`（GPU 模型串行执行）。
+- 减小 `--timemixer-batch-size 8`（降低单次推理显存占用）。
+- 快速联调时降低 `--timemixer-epochs 1 --timemixer-patience 1`。
+- 关闭其他占用 GPU 的程序（nvidia-smi 查看）。
+
+**注意：** 快速参数（减少 epochs / patience）只用于工程链路验证，不代表正式精度。
+
+---
+
+#### Q10: TimesFM 依赖报错怎么办？
+
+**经验证版本：**
+- `timesfm==2.0.1`
+- 使用 `TimesFM_2p5_200M_torch` API（纯 PyTorch，Windows 兼容）。
+- 避免使用 JAX API（Windows 不兼容）。
+
+**解决方法：**
+- 重新安装验证版本：`pip install timesfm==2.0.1`。
+- 不要修改 `TimesFMBackend/` 代码逻辑。
+- 保持 LightGBM 和 TimesFM 的 1.0-compatible bundled 行为不变。
+
+---
+
+#### Q11: 为什么 final/submission_ready.csv 不是 24 行？
+
+**检查命令：**
+```bash
+python scripts/verify_final_pipeline.py --date YYYY-MM-DD --runs-root outputs/runs
+```
+
+同时查看：
+- `run_manifest.json` — 确认各 stage 是否 complete。
+- `delivery_report.md` — 查看校验结果详情。
+
+**可能原因：**
+- 某模型预测少小时。
+- fuse 缺小时（某个 period 权重缺失）。
+- classifier 输出不完整。
+- final merge 出错。
+
+**解决方法：** `--force` 重跑。检查对应 task 的 prediction / fuse / final 文件。如果是 fallback 触发，查看 fallback_report。
+
+---
+
+#### Q12: Range preflight failed 怎么办？
+
+**原因：** Start 日期前 D-30..D-1 的 ledger 数据不完整。
+
+**解决方法：**
+- 先补 ledger：复制 `fixtures/repro_bundle/ledger/` 或运行 backfill。
+- 不建议使用 `--no-range-preflight` 绕过检查——正式验收必须通过 preflight。
+
+**是否需要重跑：** 是。
+
+---
+
+#### Q13: 可以减少模型数量吗？
+
+- **正式复现不建议。** 7/7 模型完整才算 NORMAL 交付。
+- `--allow-missing-models` 只能用于诊断调试，不用于正式交付。
+- 如果某模型不可用，链路仍可跑完，但交付状态会标记为 DEGRADED。
+
+---
+
+#### Q14: 可以减少 TimeMixer 训练时间吗？
+
+- **快速联调可以。** 使用：
+  ```bash
+  --timemixer-epochs 1 --timemixer-patience 1
+  ```
+- **正式精度不要减少。** 默认 80 epochs + early stopping。
+- 快速联调时必须使用隔离目录（`--runs-root` / `--ledger-root`），避免污染正式结果。
+
+---
+
+#### Q15: 如何确认没有污染正式 outputs？
+
+**检查命令：**
+```bash
+git ls-files outputs data models
+```
+预期输出为空（这些目录被 `.gitignore` 忽略）。
+
+**本地清理：**
+```bash
+# Linux / macOS
+rm -rf outputs/_validation_tmp outputs/_exp_fast outputs/_fault_injection_tmp
+
+# Windows PowerShell
+Remove-Item outputs/_validation_tmp -Recurse -Force -ErrorAction SilentlyContinue
+```
+
+---
+
+#### Q16: 复现包和正式输出有什么区别？
+
+| | `fixtures/repro_bundle/ledger` | `fixtures/repro_bundle/sample_runs` | `outputs/runs/` |
+|--|-------------------------------|-------------------------------------|-----------------|
+| 用途 | 权重学习种子数据 | 验证通过的交付样例 | 每日正式输出 |
+| 提交 Git | 是 | 是 | 否（gitignored） |
+| 是否被链路修改 | 否（静态） | 否（静态） | 是（每次运行追加） |
+| 是否可替代 backfill | 是 | 不适用 | 否 |
+
+---
+
+#### Q17: 如果想完全从零复现怎么办？
+
+1. 不使用 repro_bundle。
+2. 运行完整 `ledger_backfill`（30 天，预计 6-12 小时）。
+3. 然后每日运行 `ledger_full`。
+4. 参考 README 第二部分 B 节完整命令。
+
+---
+
+#### Q18: 为什么不直接读取 fixtures/repro_bundle/ledger？
+
+**原因：**
+- 正式运行会继续 append 新预测到 ledger。
+- `fixtures/` 应保持静态，不应被运行时修改。
+- 所以首次运行自动**复制**到 `outputs/ledger`，后续只修改 `outputs/ledger`。
+
+---
+
+#### Q19: 今天跑完以后，ledger 会怎么变化？
+
+- `ledger_predict` 会把今天各模型预测追加到 `outputs/ledger/{task}/prediction/`。
+- actual ledger 也会按可得实际值更新（同 key 自动 dedup，保留最新值）。
+- 后续日期的权重学习会自动使用更新后的 ledger。
+
+---
+
+#### Q20: 甲方只要最终交付文件应该看哪里？
+
+- 单日：`outputs/runs/YYYY-MM-DD/final/submission_ready.csv`
+- Range：查看 `range_summary.csv` 和每天的 final 文件。
+- 审计附件：`run_manifest.json` / `delivery_report.md`。
+
 ---
 
 ## License
