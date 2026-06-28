@@ -67,9 +67,15 @@ outputs/ledger/
 
 ## Daily Run Directory
 
+Each day runs the full five-stage pipeline:
+
+```
+  ledger_predict → ledger_weight → ledger_fuse → ledger_classifier → final_outputs
+```
+
 ```
 outputs/runs/{YYYY-MM-DD}/
-  run_manifest.json                         ← Full run metadata (all stages)
+  run_manifest.json                         ← Full run metadata (all five stages)
     ├── ledger_predict: status, models, rows, model_runtime_config
     ├── ledger_weight: status, training_rows, day_gate range, weight_dir
     ├── ledger_fuse: status, fused_rows, fuse_dir

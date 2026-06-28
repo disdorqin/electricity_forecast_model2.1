@@ -226,7 +226,11 @@ conda run -n epf-2 python main.py 2026-02-24 ^
 
 ### 时间段预测
 
-两个 positional 参数自动激活 range 模式：
+两个 positional 参数自动激活 range 模式。每天完整执行五阶段链路：
+
+```
+ledger_predict → ledger_weight → ledger_fuse → ledger_classifier → final_outputs
+```
 
 ```powershell
 conda run -n epf-2 python main.py 2026-02-24 2026-02-25 ^
@@ -249,18 +253,43 @@ conda run -n epf-2 python main.py --pipeline ledger_full_range ^
     --deterministic
 ```
 
-说明：
-- 时间段预测本质是逐日循环执行 `ledger_full`。
-- 每天输出独立写入 `outputs/runs/YYYY-MM-DD/`。
-- 区间汇总在 `outputs/runs/range_2026-02-24_to_2026-02-25/`。
+### 前置条件
 
-时间段参数：
+Start 日期前必须有至少 30 天完整 ledger。如果没有，请先 [初始化 ledger](#什么时候需要-backfill--历史回填)。
+
+### 输出位置
+
+- 每天独立输出：`outputs/runs/YYYY-MM-DD/final/submission_ready.csv`
+- 区间汇总：`outputs/runs/range_2026-02-24_to_2026-02-25/range_manifest.json`
+- 区间 CSV：`outputs/runs/range_2026-02-24_to_2026-02-25/range_summary.csv`
+
+### 稳定性机制
 
 | 参数 | 默认 | 行为 |
 |------|------|------|
-| `--continue-on-error` | False | 某天失败后继续后续日期 |
-| `--skip-existing-final` | False | 跳过已有有效输出的日期 |
-| `--no-range-preflight` | — | 跳过前置检查（data/ledger 存在性） |
+| `--continue-on-error` | False | 某天失败后继续后续日期，最终状态为 `partial` |
+| `--skip-existing-final` | False | 跳过已有且经过 12 项严格校验的输出的日期 |
+| `--no-range-preflight` | — | 跳过前置检查（data/ledger 存在性、D-30 覆盖） |
+
+Range preflight 默认严格检查 D-30..D-1 窗口内每天每模型 24 行的完整覆盖。如果 preflight 失败，即使在 manifest 落盘后也不会执行任何一天。详细错误见 `range_manifest.json`。
+
+### 常见状态
+
+| 状态 | 含义 |
+|------|------|
+| `complete` | 所有日期成功或跳过 |
+| `partial` | 部分日期失败（`--continue-on-error`） |
+| `preflight_failed` | 前置校验未通过 |
+| `interrupted` | 用户中断（Ctrl+C） |
+| `failed` | 某天失败后停止 |
+
+### 验证命令
+
+```shell
+python scripts/verify_range_pipeline.py --start 2026-02-24 --end 2026-02-25 --runs-root outputs/runs
+```
+
+> 详细技术文档见 [`docs/RANGE_PIPELINE_TECHNICAL_GUIDE.md`](docs/RANGE_PIPELINE_TECHNICAL_GUIDE.md)。
 
 ### Smoke 快速测试
 
