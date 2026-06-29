@@ -149,6 +149,38 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--timemixer-full-refit", action="store_true", default=True)
     parser.add_argument("--timemixer-seeds", type=int, default=42)
 
+    # --- Data sync parameters ---
+    parser.add_argument(
+        "--sync-data-before-run",
+        action="store_true",
+        default=False,
+        help="Run sync_dataset before ledger_full / ledger_full_range.",
+    )
+    parser.add_argument(
+        "--sync-source",
+        default="auto",
+        choices=["auto", "db", "http", "local"],
+        help="Data sync source. auto = db first, then http/local fallback.",
+    )
+    parser.add_argument(
+        "--force-sync",
+        action="store_true",
+        default=False,
+        help="Refresh canonical dataset even if local data exists.",
+    )
+    parser.add_argument(
+        "--require-fresh-data",
+        action="store_true",
+        default=False,
+        help="Fail if synced/local dataset is not fresh enough for the requested target date.",
+    )
+    parser.add_argument(
+        "--max-data-lag-hours",
+        type=int,
+        default=36,
+        help="Maximum allowed lag between target decision time and latest available data.",
+    )
+
     # Smoke pipeline params
     parser.add_argument("--smoke-training-months", type=int, default=3)
     parser.add_argument("--smoke-timemixer-epochs", type=int, default=3)

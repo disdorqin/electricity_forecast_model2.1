@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 
 logging.basicConfig(
@@ -51,14 +52,31 @@ def main() -> int:
 
     set_global_seed(args.seed, args.deterministic)
 
+    # --- Optional data sync before main pipeline ---
+    sync_before = getattr(args, "sync_data_before_run", False)
+    if sync_before and args.pipeline in ("ledger_full", "ledger_full_range"):
+        sync_result = run_sync_dataset_pipeline(args)
+        status = sync_result.get("status", "failed")
+        if status != "ok":
+            sync_errors = sync_result.get("errors", ["sync_dataset failed"])
+            print(f"ERROR: --sync-data-before-run: sync_dataset failed: {'; '.join(sync_errors)}", flush=True)
+            return 1
+        # Point data_path to the synced canonical xlsx so downstream
+        # pipelines use the fresh data without the user having to pass it.
+        synced_xlsx = sync_result.get("output_xlsx")
+        if synced_xlsx:
+            args.data_path = synced_xlsx
+        print(f"sync_dataset: OK (source={sync_result.get('source', '?')}, rows={sync_result.get('rows', 0)})", flush=True)
+
     if args.pipeline == "evaluate":
         output_path = run_evaluate_pipeline(args)
         print(output_path)
         return 0
     if args.pipeline == "sync_dataset":
         output_path = run_sync_dataset_pipeline(args)
-        print(output_path)
-        return 0
+        status = output_path.get("status", "failed") if isinstance(output_path, dict) else "ok"
+        print(json.dumps(output_path, indent=2, ensure_ascii=False) if isinstance(output_path, dict) else output_path)
+        return 0 if status == "ok" or status == "skipped" else 1
     # --- Ledger production pipelines ---
     if args.pipeline == "ledger_predict":
         result = run_ledger_predict(args)

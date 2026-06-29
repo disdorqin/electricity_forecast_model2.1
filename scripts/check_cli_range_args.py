@@ -7,6 +7,7 @@ Does NOT run any model code. Only validates argument parsing and normalization.
 
 from __future__ import annotations
 
+import argparse
 import io
 import sys
 from pathlib import Path
@@ -175,9 +176,85 @@ def main() -> int:
         {"skip_existing_final": True},
     )
 
+    # --- Sync dataset parameters ---
+
+    # Test 16: --sync-data-before-run parsed
+    all_pass &= check(
+        "--sync-data-before-run parsed",
+        ["main.py", "2026-02-24", "--sync-data-before-run"],
+        {"sync_data_before_run": True},
+    )
+
+    # Test 17: --sync-source parsed
+    all_pass &= check(
+        "--sync-source db parsed",
+        ["main.py", "2026-02-24", "--sync-source", "db"],
+        {"sync_source": "db"},
+    )
+
+    # Test 18: --sync-source http parsed
+    all_pass &= check(
+        "--sync-source http parsed",
+        ["main.py", "2026-02-24", "--sync-source", "http"],
+        {"sync_source": "http"},
+    )
+
+    # Test 19: --sync-source local parsed
+    all_pass &= check(
+        "--sync-source local parsed",
+        ["main.py", "2026-02-24", "--sync-source", "local"],
+        {"sync_source": "local"},
+    )
+
+    # Test 20: --force-sync parsed
+    all_pass &= check(
+        "--force-sync parsed",
+        ["main.py", "2026-02-24", "--force-sync"],
+        {"force_sync": True},
+    )
+
+    # Test 21: --require-fresh-data parsed
+    all_pass &= check(
+        "--require-fresh-data parsed",
+        ["main.py", "2026-02-24", "--require-fresh-data"],
+        {"require_fresh_data": True},
+    )
+
+    # Test 22: --max-data-lag-hours parsed
+    all_pass &= check(
+        "--max-data-lag-hours parsed",
+        ["main.py", "2026-02-24", "--max-data-lag-hours", "48"],
+        {"max_data_lag_hours": 48},
+    )
+
+    # Test 23: --sync-source with invalid value fails
+    all_pass &= check(
+        "--sync-source invalid value fails",
+        ["main.py", "--pipeline", "sync_dataset", "--sync-source", "invalid"],
+        {"expect_error": "invalid choice"},
+    )
+
+    # Test 24: --epf-v1-mode is hidden (not in help)
+    parser = build_parser()
+    args24, _ = _parse_argv(["main.py", "2026-02-24", "--epf-v1-mode", "exact"])
+    epf_mode = getattr(args24, "epf_v1_mode", None) if args24 else None
+    all_pass &= check(
+        "--epf-v1-mode can be parsed",
+        ["main.py", "2026-02-24", "--epf-v1-mode", "exact"],
+        {"epf_v1_mode": "exact"},
+    )
+    # Verify it's hidden from help
+    help_text = parser.format_help()
+    epf_in_help = "--epf-v1-mode" in help_text
+    if epf_in_help:
+        print(f"  FAIL: --epf-v1-mode should be hidden from help but found in help text")
+        all_pass = False
+    else:
+        print(f"  PASS: --epf-v1-mode is hidden from help")
+
     print()
     if all_pass:
-        print(f"RESULT: ALL {15} TESTS PASSED")
+        print(f"RESULT: ALL {24} TESTS PASSED")
         return 0
     else:
         print(f"RESULT: SOME TESTS FAILED")

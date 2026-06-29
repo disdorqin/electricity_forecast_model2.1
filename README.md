@@ -294,6 +294,74 @@ python main.py 2026-02-24 ^
 
 ---
 
+### C. 数据同步
+
+支持从 MySQL 数据库、HTTP 云端、本地文件三种来源同步数据。
+
+#### 1. 独立同步（推荐生产使用）
+
+```bash
+# 自动选择数据源（数据库 → HTTP → 本地）
+python main.py --pipeline sync_dataset --sync-source auto
+
+# 仅从数据库同步
+python main.py --pipeline sync_dataset --sync-source db
+
+# 仅从 HTTP 云端下载
+python main.py --pipeline sync_dataset --sync-source http
+
+# 仅使用本地已有文件
+python main.py --pipeline sync_dataset --sync-source local
+
+# 强制刷新（即使本地已有数据）
+python main.py --pipeline sync_dataset --sync-source auto --force-sync
+```
+
+需要 `.env` 文件（从 `.env.example` 复制）：
+
+```env
+DB_HOST=
+DB_PORT=3306
+DB=
+DB_USER=
+DB_PWD=
+DATA_SET_NAME=data/shandong_pmos_hourly.xlsx
+```
+
+#### 2. 每日预测前自动同步
+
+```bash
+python main.py 2026-02-26 --sync-data-before-run
+```
+
+严格模式（数据不够新则阻断）：
+
+```bash
+python main.py 2026-02-26 --sync-data-before-run --require-fresh-data
+```
+
+注意：
+
+- 默认 `python main.py 2026-02-26` **不**自动连数据库。
+- 只有显式加 `--sync-data-before-run` 时才在 `ledger_full` / `ledger_full_range` 前执行同步。
+- 同步成功后，`--data-path` 自动指向同步后的 canonical xlsx。
+
+#### 3. 推荐生产调度
+
+建议两步式，数据和模型问题分开定位：
+
+```bash
+# Step 1: 同步数据
+python main.py --pipeline sync_dataset --sync-source auto --require-fresh-data
+
+# Step 2: 运行预测（使用 Step 1 同步的数据）
+python main.py 2026-02-26 --data-path data/shandong_pmos_hourly.xlsx
+```
+
+同步审计产物：`outputs/data_sync/sync_manifest.json` / `outputs/data_sync/sync_report.md`。
+
+---
+
 ## 第三部分：技术文档
 
 ### 1. Ledger 机制
@@ -710,6 +778,93 @@ Remove-Item outputs/_validation_tmp -Recurse -Force -ErrorAction SilentlyContinu
 - 单日：`outputs/runs/YYYY-MM-DD/final/submission_ready.csv`
 - Range：查看 `range_summary.csv` 和每天的 final 文件。
 - 审计附件：`run_manifest.json` / `delivery_report.md`。
+
+---
+
+#### Q21: 每天正式运行前是否应该自动同步数据？
+
+**生产建议：**
+- 先独立跑 `sync_dataset`，再跑 `ledger_full`。
+- 如果想一条命令，可用 `--sync-data-before-run`。
+- 默认不自动同步，保证离线复现可用。
+- **两步式是最安全的方式**：数据和模型问题分开定位；数据库不可用时不会误判为模型失败。
+
+**检查当前数据新鲜度：**
+```bash
+python main.py --pipeline sync_dataset --sync-source local --require-fresh-data
+```
+
+---
+
+#### Q22: 数据库连接失败怎么办？
+
+**检查命令：**
+```bash
+python main.py --pipeline sync_dataset --sync-source db
+```
+
+**检查 `.env` 配置：**
+```env
+DB_HOST=
+DB_PORT=3306
+DB=
+DB_USER=
+DB_PWD=
+```
+
+**常见原因和解决：**
+- 网络/VPN/白名单问题 → 修复网络连接
+- 账号密码错误 → 验证凭据
+- 改用 `--sync-source auto` 让 HTTP/local fallback 接管
+- 或手动放置 `data/shandong_pmos_hourly.xlsx`
+
+---
+
+#### Q23: 数据同步成功，但预测还是失败？
+
+**数据同步只保证数据文件存在**, 预测仍可能因为以下原因失败：
+
+- Ledger 缺失（30 天窗口不完整）
+- 模型依赖问题（PyTorch / TimesFM 版本）
+- GPU 资源不足（CUDA OOM）
+- 输出校验失败（postflight）
+
+**诊断方法：**
+- 看 `run_manifest.json` 的 errors 列表
+- 看 `delivery_report.md` 的校验详情
+- 参考 Q4（ledger_weight failed）和 Q5（数据文件问题）
+
+---
+
+#### Q24: `--sync-data-before-run` 会覆盖我的自定义 `--data-path` 吗？
+
+- 如果用户没有传 `--data-path`，同步后会自动指向 `data/shandong_pmos_hourly.xlsx`。
+- 如果用户传了 `--data-path /path/to/my/file.xlsx`，同步会写入该路径。
+- 同步成功后，`args.data_path` 会更新为同步输出路径，后续模型链路自动使用。
+
+---
+
+#### Q25: `sync_dataset` 失败会触发 emergency fallback 吗？
+
+**不会。** 数据同步失败和模型 fallback 是两件事：
+
+- `sync_dataset` 失败时，`--sync-data-before-run` 直接 exit code 1。
+- 不进入模型链路，不触发 emergency fallback。
+- 因为 fallback 也需要历史数据，数据源都坏了不应生成假交付。
+- 如果用户没有要求同步（没有 `--sync-data-before-run`），只是已有本地数据旧，则由 `require_fresh_data` 决定是否拦截。
+
+---
+
+#### Q26: 同步后的数据保存在哪里？
+
+| 文件 | 路径 | 编码 |
+|------|------|------|
+| XLSX | `data/shandong_pmos_hourly.xlsx` | 标准 Excel |
+| CSV | `data/shandong_pmos_hourly.csv` | GBK（兼容中文 Excel 打开） |
+| Manifest | `outputs/data_sync/sync_manifest.json` | UTF-8 |
+| Report | `outputs/data_sync/sync_report.md` | UTF-8 |
+
+如果 CSV GBK 编码在某些环境下乱码，尝试用 `utf-8-sig` 打开。同步时优先尝试 GBK，失败则回退到 `utf-8-sig`。
 
 ---
 
