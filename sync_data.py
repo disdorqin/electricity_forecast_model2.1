@@ -11,7 +11,6 @@ import os
 import sys
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from shutil import copyfile
 from typing import Optional
 from urllib.error import HTTPError, URLError
 from urllib.request import urlretrieve
@@ -117,15 +116,15 @@ def _latest_local_dataset_source() -> tuple[Path, str]:
     )
 
 
-def _save_frame(df: pd.DataFrame) -> str:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    df.to_excel(CANONICAL_XLSX, index=False)
+def _save_frame(df: pd.DataFrame, xlsx_path: Path, csv_path: Path) -> str:
+    xlsx_path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_excel(xlsx_path, index=False)
     # Always try gbk first for Chinese character compatibility
     try:
-        df.to_csv(CANONICAL_CSV, index=False, encoding="gbk")
+        df.to_csv(csv_path, index=False, encoding="gbk")
     except Exception:
-        df.to_csv(CANONICAL_CSV, index=False, encoding="utf-8-sig")
-    return str(CANONICAL_XLSX)
+        df.to_csv(csv_path, index=False, encoding="utf-8-sig")
+    return str(xlsx_path)
 
 
 # ---------------------------------------------------------------------------
@@ -144,23 +143,27 @@ def _sync_from_database() -> pd.DataFrame:
 def _sync_from_http() -> pd.DataFrame:
     """Download the latest available .xlsx from the cloud. Raises on failure."""
     source_file = _download_latest_available_excel()
-    if source_file.resolve() != CANONICAL_XLSX.resolve():
-        copyfile(source_file, CANONICAL_XLSX)
-    df = pd.read_excel(CANONICAL_XLSX)
+    df = pd.read_excel(source_file)
     if df.empty:
         raise ValueError("HTTP download produced empty dataset")
     return df
 
 
-def _sync_from_local() -> pd.DataFrame:
-    """Use the latest local dataset. Raises on failure."""
-    local_source, source_kind = _latest_local_dataset_source()
-    if source_kind == "csv":
-        df = pd.read_csv(local_source, encoding="gbk")
+def _sync_from_local(canonical_xlsx: Path = CANONICAL_XLSX) -> pd.DataFrame:
+    """Use the latest local dataset. Raises on failure.
+
+    If *canonical_xlsx* already exists (e.g. from a previous write or a
+    custom ``data_path``), read it directly.  Otherwise fall back to the
+    ``DATA_DIR`` file-discovery logic.
+    """
+    if canonical_xlsx.exists():
+        df = pd.read_excel(canonical_xlsx)
     else:
-        if local_source.resolve() != CANONICAL_XLSX.resolve():
-            copyfile(local_source, CANONICAL_XLSX)
-        df = pd.read_excel(CANONICAL_XLSX)
+        local_source, source_kind = _latest_local_dataset_source()
+        if source_kind == "csv":
+            df = pd.read_csv(local_source, encoding="gbk")
+        else:
+            df = pd.read_excel(local_source)
     if df.empty:
         raise ValueError("Local dataset is empty")
     return df
@@ -362,18 +365,39 @@ def sync_dataset(
         data_dir = DATA_DIR
 
     # When source is "auto" and no explicit source is needed, and force is
-    # False, and the file already exists, skip the sync entirely.
+    # False, and the file already exists, skip the sync entirely — unless
+    # require_fresh asks us to validate freshness first.
     if (
         source == "auto"
         and not force
         and canonical_xlsx.exists()
         and canonical_xlsx.stat().st_size > 0
     ):
-        # Load the existing file to return metadata
         df = pd.read_excel(canonical_xlsx)
         validation = validate_synced_dataset(
-            df, target_date=None
-        )  # skip freshness — user didn't ask for it
+            df,
+            target_date=target_date if require_fresh else None,
+            max_data_lag_hours=max_data_lag_hours,
+        )
+        freshness = validation.get("freshness")
+
+        if require_fresh and target_date is not None and freshness and freshness.get("status") == "FAIL":
+            manifest = {
+                "status": "failed",
+                "source": "local",
+                "output_xlsx": str(canonical_xlsx),
+                "output_csv": str(canonical_csv),
+                "rows": validation.get("rows", 0),
+                "columns": validation.get("columns", []),
+                "min_timestamp": validation.get("min_timestamp"),
+                "max_timestamp": validation.get("max_timestamp"),
+                "freshness": freshness,
+                "warnings": validation.get("warnings", []),
+                "errors": validation.get("errors", []),
+            }
+            _write_sync_manifest(manifest)
+            return manifest
+
         manifest = {
             "status": "skipped",
             "source": "local",
@@ -383,7 +407,7 @@ def sync_dataset(
             "columns": list(df.columns),
             "min_timestamp": validation.get("min_timestamp"),
             "max_timestamp": validation.get("max_timestamp"),
-            "freshness": None,
+            "freshness": freshness,
             "warnings": [],
             "errors": [],
             "message": "Canonical dataset already exists; use --force-sync to refresh",
@@ -401,12 +425,12 @@ def sync_dataset(
     elif source == "http":
         source_chain = [("http", "http", _sync_from_http)]
     elif source == "local":
-        source_chain = [("local", "local", _sync_from_local)]
+        source_chain = [("local", "local", lambda: _sync_from_local(canonical_xlsx))]
     elif source == "auto":
         source_chain = [
             ("db", "database", _sync_from_database),
             ("http", "http", _sync_from_http),
-            ("local", "local", _sync_from_local),
+            ("local", "local", lambda: _sync_from_local(canonical_xlsx)),
         ]
     else:
         return {
@@ -461,7 +485,7 @@ def sync_dataset(
 
     if validation["status"] == "failed":
         # Structural failure — still save the file but report failure
-        _save_frame(final_df)
+        _save_frame(final_df, canonical_xlsx, canonical_csv)
         manifest = {
             "status": "failed",
             "source": used_source,
@@ -479,7 +503,7 @@ def sync_dataset(
         return manifest
 
     # Save
-    _save_frame(final_df)
+    _save_frame(final_df, canonical_xlsx, canonical_csv)
 
     manifest = {
         "status": "ok",

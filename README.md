@@ -568,9 +568,8 @@ print(validate_ledger_window("2026-02-26", "outputs/ledger"))
 ```
 
 **解决方法：**
-1. 删除坏的 `outputs/ledger`，让程序自动从 fixtures bootstrap。
-2. 或手动复制 `fixtures/repro_bundle/ledger/` 到 `outputs/ledger/`。
-3. 或运行完整 backfill：`python main.py --pipeline ledger_backfill --start YYYY-MM-DD --end YYYY-MM-DD`。
+1. 手动复制 `fixtures/repro_bundle/ledger/` 到 `outputs/ledger/`。
+2. 或运行完整 backfill：`python main.py --pipeline ledger_backfill --start YYYY-MM-DD --end YYYY-MM-DD`。
 
 **是否需要重跑：** 是。
 

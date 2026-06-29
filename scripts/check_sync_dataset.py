@@ -230,7 +230,8 @@ def test_sync_auto_with_local() -> str:
         df = _make_valid_df()
         df.to_excel(xlsx_path, index=False)
 
-        with patch("sync_data.fetch_web_grid_data", side_effect=ValueError("mock: DB down")):
+        with patch("sync_data.fetch_web_grid_data", side_effect=ValueError("mock: DB down")), \
+             patch("sync_data._download_latest_available_excel", side_effect=FileNotFoundError("mock: no HTTP")):
             result = sync_dataset(
                 data_path=str(xlsx_path),
                 source="auto",
@@ -256,7 +257,8 @@ def test_sync_skipped_when_exists() -> str:
         df = _make_valid_df()
         df.to_excel(xlsx_path, index=False)
 
-        with patch("sync_data.fetch_web_grid_data", side_effect=ValueError("mock: no DB")):
+        with patch("sync_data.fetch_web_grid_data", side_effect=ValueError("mock: no DB")), \
+             patch("sync_data._download_latest_available_excel", side_effect=FileNotFoundError("mock: no HTTP")):
             # First call with force=True to ensure it was written
             r1 = sync_dataset(data_path=str(xlsx_path), source="auto", force=True)
             check(
@@ -282,7 +284,8 @@ def test_sync_force_resyncs() -> str:
         df = _make_valid_df()
         df.to_excel(xlsx_path, index=False)
 
-        with patch("sync_data.fetch_web_grid_data", side_effect=ValueError("mock: no DB")):
+        with patch("sync_data.fetch_web_grid_data", side_effect=ValueError("mock: no DB")), \
+             patch("sync_data._download_latest_available_excel", side_effect=FileNotFoundError("mock: no HTTP")):
             r1 = sync_dataset(data_path=str(xlsx_path), source="auto", force=False)
             check(
                 "force: first call status skipped",
@@ -383,6 +386,156 @@ def test_prefer_data_path_over_default() -> str:
     return ""
 
 
+def _make_df_up_to(last_date: str, last_hour: int = 23) -> pd.DataFrame:
+    """Create a synthetic DataFrame from 2026-02-24 up to *last_date*."""
+    from datetime import datetime, timedelta
+
+    start = datetime(2026, 2, 24)
+    end = datetime.strptime(last_date, "%Y-%m-%d").replace(hour=last_hour)
+    rows = []
+    cursor = start
+    while cursor <= end:
+        rows.append({
+            "时刻": cursor.strftime("%Y-%m-%d %H:%M:%S"),
+            "日前电价": 200.0 + cursor.hour,
+            "实时电价": 180.0 + cursor.hour,
+            "feature_a": 1.0,
+        })
+        cursor += timedelta(hours=1)
+    return pd.DataFrame(rows)
+
+
+def test_require_fresh_stale_fails() -> str:
+    """Test 15: existing file + require_fresh=True + stale data -> failed."""
+    with tempfile.TemporaryDirectory() as td:
+        xlsx_path = Path(td) / "shandong_pmos_hourly.xlsx"
+        # Data only up to 2026-02-24 — stale for target 2026-02-28
+        df = _make_df_up_to("2026-02-24")
+        df.to_excel(xlsx_path, index=False)
+
+        result = sync_dataset(
+            data_path=str(xlsx_path),
+            source="auto",
+            force=False,
+            require_fresh=True,
+            target_date="2026-02-28",
+            max_data_lag_hours=36,
+        )
+        check(
+            "require_fresh stale: status failed",
+            result.get("status") == "failed",
+            f"expected failed, got {result.get('status')}",
+        )
+        freshness = result.get("freshness", {})
+        check(
+            "require_fresh stale: freshness FAIL",
+            freshness.get("status") == "FAIL",
+            f"expected FAIL, got {freshness}",
+        )
+    return ""
+
+
+def test_require_fresh_fresh_skips() -> str:
+    """Test 16: existing file + require_fresh=True + fresh data -> skipped/freshness PASS."""
+    with tempfile.TemporaryDirectory() as td:
+        xlsx_path = Path(td) / "shandong_pmos_hourly.xlsx"
+        # Data up to 2026-02-27 — fresh for target 2026-02-28 within 36h window
+        df = _make_df_up_to("2026-02-27")
+        df.to_excel(xlsx_path, index=False)
+
+        result = sync_dataset(
+            data_path=str(xlsx_path),
+            source="auto",
+            force=False,
+            require_fresh=True,
+            target_date="2026-02-28",
+            max_data_lag_hours=36,
+        )
+        check(
+            "require_fresh fresh: status skipped",
+            result.get("status") == "skipped",
+            f"expected skipped, got {result.get('status')}",
+        )
+        freshness = result.get("freshness", {})
+        check(
+            "require_fresh fresh: freshness PASS",
+            freshness.get("status") == "PASS",
+            f"expected PASS, got {freshness}",
+        )
+    return ""
+
+
+def test_custom_data_path_writes_files() -> str:
+    """Test 17: custom data_path actually writes to custom path."""
+    with tempfile.TemporaryDirectory() as td:
+        custom_path = Path(td) / "custom" / "my_data.xlsx"
+        custom_path.parent.mkdir(parents=True, exist_ok=True)
+        df = _make_valid_df()
+        df.to_excel(custom_path, index=False)
+
+        result = sync_dataset(
+            data_path=str(custom_path),
+            source="local",
+            force=True,
+        )
+        check(
+            "custom path: xlsx file exists on disk",
+            Path(result["output_xlsx"]).exists(),
+            f"xlsx not found at {result['output_xlsx']}",
+        )
+        check(
+            "custom path: csv file exists on disk",
+            Path(result["output_csv"]).exists(),
+            f"csv not found at {result['output_csv']}",
+        )
+        check(
+            "custom path: output_xlsx matches custom_path",
+            result.get("output_xlsx") == str(custom_path),
+            f"expected {custom_path}, got {result.get('output_xlsx')}",
+        )
+    return ""
+
+
+def test_manifest_matches_real_file() -> str:
+    """Test 18: manifest output_xlsx matches real file on disk."""
+    with tempfile.TemporaryDirectory() as td:
+        custom_path = Path(td) / "data" / "shandong_pmos_hourly.xlsx"
+        custom_path.parent.mkdir(parents=True, exist_ok=True)
+        df = _make_valid_df()
+        df.to_excel(custom_path, index=False)
+
+        result = sync_dataset(
+            data_path=str(custom_path),
+            source="local",
+            force=True,
+        )
+        # Verify manifest path matches actual file
+        manifest_xlsx = result.get("output_xlsx", "")
+        manifest_csv = result.get("output_csv", "")
+        check(
+            "manifest: output_xlsx matches file on disk",
+            manifest_xlsx == str(custom_path) and Path(manifest_xlsx).exists(),
+            f"manifest xlsx={manifest_xlsx}, custom={custom_path}",
+        )
+        check(
+            "manifest: output_csv is derived correctly",
+            manifest_csv == str(custom_path.with_suffix(".csv")) and Path(manifest_csv).exists(),
+            f"manifest csv={manifest_csv}, expected={custom_path.with_suffix('.csv')}",
+        )
+        # Verify the manifest written to outputs/data_sync/ has the same paths
+        from sync_data import SYNC_MANIFEST_DIR
+        manifest_path = SYNC_MANIFEST_DIR / "sync_manifest.json"
+        if manifest_path.exists():
+            with open(manifest_path, encoding="utf-8") as f:
+                on_disk = json.load(f)
+            check(
+                "manifest: on-disk output_xlsx matches",
+                on_disk.get("output_xlsx") == manifest_xlsx,
+                f"on-disk={on_disk.get('output_xlsx')}, returned={manifest_xlsx}",
+            )
+    return ""
+
+
 def main() -> int:
     print("=" * 60)
     print("CHECK_SYNC_DATASET")
@@ -403,6 +556,10 @@ def main() -> int:
     test_validate_unknown_source()
     test_sync_manifest_written()
     test_prefer_data_path_over_default()
+    test_require_fresh_stale_fails()
+    test_require_fresh_fresh_skips()
+    test_custom_data_path_writes_files()
+    test_manifest_matches_real_file()
 
     print()
     passed = sum(1 for _, s, _ in results if s == PASS)
