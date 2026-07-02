@@ -471,7 +471,7 @@ def validate_daily_submission(
         return _submission_result("FAIL", errors, warnings, sub_path, manifest_path)
 
     try:
-        with open(manifest_path) as f:
+        with open(manifest_path, "r", encoding="utf-8") as f:
             manifest = json.load(f)
     except Exception as exc:
         errors.append(f"cannot read manifest: {exc}")
