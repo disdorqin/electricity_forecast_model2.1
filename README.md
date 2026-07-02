@@ -192,7 +192,17 @@ python main.py YYYY-MM-DD --sync-data-before-run --require-fresh-data
 
 ---
 
-## 6. 正式运行命令
+## 6. 运行模式：主线与副线
+
+项目保留三类运行方式，别混在一起看。
+
+### 6.1 主线：正式交付 full chain
+
+用于最终交付，完整执行五阶段：
+
+```text
+ledger_predict → ledger_weight → ledger_fuse → ledger_classifier → final_outputs
+```
 
 Linux / macOS：
 
@@ -230,7 +240,111 @@ final/submission_ready.csv = 24 rows, 0 NaN
 fallback_used = false
 ```
 
-不推荐把下面参数用于正式 NORMAL 交付：
+### 6.2 副线 A：简单跑 / 快速验收
+
+用于快速确认代码、数据路径、ledger、权重融合有没有明显问题。适合演示、 smoke test、交付前最后检查。
+
+推荐顺序：
+
+```bash
+python -m py_compile main.py cli/parser.py pipelines/ledger_weight.py pipelines/prediction_ledger.py pipelines/delivery_quality.py pipelines/ledger_classifier.py
+python scripts/check_adaptive_realtime_weight_days.py
+python scripts/check_delivery_stability.py
+python scripts/check_target_day_nan_regression.py
+python scripts/check_sync_dataset.py
+```
+
+然后跑单日 full chain：
+
+```bash
+python main.py 2026-07-03 \
+  --data-path data/shandong_pmos_hourly_0702.xlsx \
+  --ledger-root outputs/ledger \
+  --weight-max-lookback-days 180
+```
+
+简单跑特点：
+
+```text
+目标：快速判断能不能跑通
+输入：已有 data + 已有 ledger
+输出：submission_ready.csv / run_manifest.json / delivery_report.md
+不负责补齐长历史 ledger
+不建议提交 outputs/runs 到 Git
+```
+
+### 6.3 副线 B：复杂全量跑 / 生产完整跑
+
+用于更接近生产的完整流程：先同步数据，再补 ledger，再跑正式 full chain。
+
+推荐流程：
+
+```bash
+# 1. 同步最新数据
+python main.py --pipeline sync_dataset \
+  --sync-source auto \
+  --force-sync \
+  --require-fresh-data
+
+# 2. 回填历史 ledger，确保权重学习能选到更近的 30 个完整训练日
+python main.py --pipeline ledger_backfill \
+  --start 2026-06-03 \
+  --end 2026-07-02 \
+  --data-path data/shandong_pmos_hourly_0702.xlsx \
+  --max-cpu-workers 2 \
+  --max-gpu-workers 1 \
+  --seed 42 \
+  --deterministic \
+  --force
+
+# 3. 正式跑目标日
+python main.py 2026-07-03 \
+  --data-path data/shandong_pmos_hourly_0702.xlsx \
+  --ledger-root outputs/ledger \
+  --weight-max-lookback-days 180 \
+  --max-cpu-workers 2 \
+  --max-gpu-workers 1 \
+  --seed 42 \
+  --deterministic
+```
+
+复杂全量跑特点：
+
+```text
+目标：尽量贴近正式生产
+输入：最新数据 + 尽可能完整的历史 ledger
+重点：ledger_backfill 让权重学习使用更近的完整训练日
+耗时：明显长于简单跑
+适用：正式交付前、生产机部署、长区间回测
+```
+
+### 6.4 副线 C：已有预测结果，只验证后半链路
+
+如果 7 个模型已经跑完，只想验证权重、融合、分类器、最终输出：
+
+```powershell
+$TARGET_DATE = "2026-07-03"
+$LEDGER_ROOT = "outputs/ledger"
+$RUNS_ROOT = "outputs/_final_chain_verify_20260703/runs"
+
+Copy-Item -Recurse -Force "outputs/runs/2026-07-03" "$RUNS_ROOT/"
+
+python main.py --pipeline ledger_weight --date $TARGET_DATE --ledger-root $LEDGER_ROOT --runs-root $RUNS_ROOT --weight-max-lookback-days 180
+python main.py --pipeline ledger_fuse --date $TARGET_DATE --ledger-root $LEDGER_ROOT --runs-root $RUNS_ROOT
+python main.py --pipeline ledger_classifier --date $TARGET_DATE --ledger-root $LEDGER_ROOT --runs-root $RUNS_ROOT
+```
+
+这个模式不重新跑 7 个模型，只验证：
+
+```text
+ledger_weight → ledger_fuse → ledger_classifier → final_outputs/postflight
+```
+
+---
+
+## 7. 不推荐用于正式 NORMAL 的参数
+
+下面参数只用于诊断或应急，不作为 NORMAL 交付依据：
 
 ```text
 --allow-missing-models
@@ -238,11 +352,11 @@ fallback_used = false
 --no-range-preflight
 ```
 
-这些参数只用于诊断或应急。
+如果用了这些参数跑通，只能说明工程链路可继续，不代表正式 NORMAL。
 
 ---
 
-## 7. Ledger 目录
+## 8. Ledger 目录
 
 默认 ledger 根目录：
 
@@ -269,7 +383,7 @@ outputs/ledger
 
 ---
 
-## 8. 验证命令
+## 9. 验证命令
 
 基础回归：
 
@@ -319,7 +433,7 @@ PY
 
 ---
 
-## 9. 如果需要补 ledger
+## 10. 如果需要补 ledger
 
 如果 adaptive 在 lookback 范围内凑不够 30 个完整训练日，需要 backfill：
 
@@ -339,7 +453,7 @@ python main.py --pipeline ledger_backfill \
 
 ---
 
-## 10. 输出文件
+## 11. 输出文件
 
 | 文件 | 说明 |
 |---|---|
@@ -353,7 +467,7 @@ python main.py --pipeline ledger_backfill \
 
 ---
 
-## 11. Delivery Status
+## 12. Delivery Status
 
 | delivery_status | exit code | 含义 |
 |---|---:|---|
@@ -365,7 +479,7 @@ python main.py --pipeline ledger_backfill \
 
 ---
 
-## 12. Troubleshooting
+## 13. Troubleshooting
 
 | 问题 | 判断 | 处理 |
 |---|---|---|
@@ -379,7 +493,7 @@ python main.py --pipeline ledger_backfill \
 
 ---
 
-## 13. Git 安全
+## 14. Git 安全
 
 不要提交：
 
@@ -401,7 +515,7 @@ git ls-files data models outputs/runs outputs/_*
 
 ---
 
-## 14. 最近关键修复
+## 15. 最近关键修复
 
 | commit | 内容 |
 |---|---|
@@ -411,9 +525,10 @@ git ls-files data models outputs/runs outputs/_*
 | `0214aaf` | 修复 classifier manifest Windows UTF-8 问题 |
 | `40965eb` | README 交付版 |
 | `f379a4c` | Dayahead 也改为 adaptive complete training days |
+| 最新 main | 恢复并保留简单跑 / 复杂全量跑 / 后半链路验证三条副线说明 |
 
 ---
 
-## 15. 一句话结论
+## 16. 一句话结论
 
 模型预测流程、DA/RT 自适应权重学习、融合、分类器、最终输出与 postflight 均已通过 2026-07-03 正式陪跑验收。完整 NORMAL 交付的核心前提是：**ledger 中能在 lookback 范围内为 Dayahead 和 Realtime 各自找到最近 30 个完整训练日。**
