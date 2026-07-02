@@ -1,12 +1,15 @@
 """
-Regression tests for adaptive realtime training day selection.
+Regression tests for adaptive training day selection.
 
 Tests select_complete_training_days() with synthetic ledger data covering:
   Test 1: Formal dress-rehearsal scenario (D-1 partial actual, 30 complete before)
   Test 2: Middle day missing (skip one day, still collect 30)
   Test 3: Model prediction missing (sgdfnet missing 24h)
   Test 4: Cannot collect 30 days within lookback
-  Test 5: Dayahead unaffected (still uses contiguous D-30..D-1)
+  Test 5: Dayahead adaptive too (D-1 incomplete, select 30 from D-2 onwards)
+  Test 6: Prediction with wrong hour set (missing h24, has h25)
+  Test 7: Actual with wrong hour set (missing h1, has h0)
+  Test 8: age_days is position-based when window_days_list is explicit
 """
 
 from __future__ import annotations
@@ -336,28 +339,34 @@ def test4_cannot_collect_30():
 
 
 # ===========================================================================
-# Test 5: Dayahead unaffected
+# Test 5: Dayahead adaptive too
 # ===========================================================================
 
 
-def test5_dayahead_unaffected():
+def test5_dayahead_adaptive():
     """
-    Confirm dayahead still uses contiguous D-30..D-1 via validate_ledger_window.
-    select_complete_training_days works for dayahead too but the main pipeline
-    does NOT call it for dayahead.
+    Confirm dayahead also uses adaptive complete-day selection.
+    Target: 2026-07-03
+    D-1 (2026-07-02): prediction missing → skip
+    D-2..D-31 (2026-07-01..2026-06-02): all complete → select 30
     """
-    print("\n=== Test 5: Dayahead unaffected ===")
+    print("\n=== Test 5: Dayahead adaptive too ===")
     tmpdir = tempfile.mkdtemp(prefix="test5_")
     try:
         target = "2026-07-03"
-        # Build 30 complete dayahead days
-        complete_days = _date_range_strings(target, 30)
+        # D-1 is incomplete (prediction missing)
+        incomplete_day = "2026-07-02"
+        # 30 complete days from D-2 onwards
+        complete_days = _date_range_strings("2026-07-02", 30)  # D-2..D-31
 
+        # Prediction: only complete_days have data, incomplete_day has nothing
         pred_df = _build_prediction_rows("dayahead", complete_days, DAYAHEAD_MODELS_SET)
-        act_df = _build_actual_rows("dayahead", complete_days, n_hours=24)
+        # Actual: all days including incomplete_day have 24h
+        all_days = [incomplete_day] + complete_days
+        act_df = _build_actual_rows("dayahead", all_days, n_hours=24)
         _write_ledger(tmpdir, "dayahead", pred_df, act_df)
 
-        # select_complete_training_days should also work for dayahead
+        # select_complete_training_days should work for dayahead
         result = select_complete_training_days(
             task="dayahead",
             target_date=target,
@@ -369,18 +378,24 @@ def test5_dayahead_unaffected():
 
         _assert(result["status"] == "PASS", f"dayahead selection PASS (got {result['status']})")
         _assert(result["selected_count"] == 30, f"dayahead selected_count=30 (got {result['selected_count']})")
+        _assert(result["selected_days"][0] == "2026-07-01", f"latest selected=2026-07-01 (got {result['selected_days'][0]})")
 
-        # Verify the main pipeline still uses fixed contiguous window for dayahead
-        # by checking that ledger_weight.run_ledger_weight uses dayahead_days_list
-        # (not select_complete_training_days) for dayahead
+        # Check 2026-07-02 is in skipped
+        skipped_days = [s["day"] for s in result["skipped_days"]]
+        _assert(incomplete_day in skipped_days, f"2026-07-02 in skipped_days")
+
+        # Verify run_ledger_weight source code uses select_complete_training_days for dayahead
         from pipelines.ledger_weight import run_ledger_weight
         import inspect
         src = inspect.getsource(run_ledger_weight)
         _assert(
-            "select_complete_training_days" not in src.split("# Dayahead")[1].split("# Realtime")[0]
-            if "# Dayahead" in src and "# Realtime" in src
-            else True,
-            "dayahead path does NOT call select_complete_training_days"
+            "select_complete_training_days" in src,
+            "run_ledger_weight calls select_complete_training_days"
+        )
+        # Check that there is no "fixed_contiguous" method reference
+        _assert(
+            "fixed_contiguous" not in src,
+            "run_ledger_weight does NOT reference fixed_contiguous"
         )
 
     finally:
@@ -626,7 +641,7 @@ if __name__ == "__main__":
     test2_middle_day_missing()
     test3_model_prediction_missing()
     test4_cannot_collect_30()
-    test5_dayahead_unaffected()
+    test5_dayahead_adaptive()
     test6_prediction_wrong_hour_set()
     test7_actual_wrong_hour_set()
     test8_age_days_position_based()

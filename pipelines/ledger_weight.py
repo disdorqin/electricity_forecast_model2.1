@@ -5,9 +5,10 @@ For a target day D, reads prediction ledger + actual ledger for
 the training window, builds a training table, and learns
 per-(task, period) fusion weights using Daily Ledger GEF.
 
-Dayahead: fixed contiguous D-30..D-1 window (strict validation).
-Realtime: adaptive complete-day selection — scans from D-1 backwards,
-          skips incomplete days, collects the most recent 30 complete days.
+Both dayahead and realtime use adaptive complete-day selection:
+scan backwards from D-1, skip incomplete days, collect the most recent 30 complete days.
+
+validate_ledger_window() is retained as an audit-only check (not a hard gate).
 
 Output:
   outputs/runs/{D}/{task}/weight/
@@ -316,17 +317,9 @@ def run_ledger_weight(args: Any) -> dict:
 
     D = pd.Timestamp(target_date)
 
-    # Fixed contiguous window for dayahead [D-30, D-1]
-    dayahead_days_list: list[str] = []
-    for i in range(1, window_days + 1):
-        d = D - pd.Timedelta(days=i)
-        dayahead_days_list.append(d.strftime("%Y-%m-%d"))
-
     manifest: dict[str, Any] = {
         "pipeline": "ledger_weight",
         "target_date": target_date,
-        "window_start": dayahead_days_list[-1],
-        "window_end": dayahead_days_list[0],
         "window_days": window_days,
         "started_at": datetime.now(timezone.utc).isoformat(),
         "status": "running",
@@ -338,51 +331,28 @@ def run_ledger_weight(args: Any) -> dict:
 
     try:
         # ------------------------------------------------------------------
-        # Dayahead: strict contiguous D-30..D-1 validation (unchanged)
+        # Audit-only: strict contiguous D-30..D-1 validation (informational)
         # ------------------------------------------------------------------
         from pipelines.delivery_quality import validate_ledger_window
 
-        ledger_window_check = validate_ledger_window(target_date, ledger_root, days=window_days)
-        manifest["ledger_window_check"] = ledger_window_check
-
-        # Extract dayahead-specific errors for the strict gate
-        dayahead_window_errors = [
-            e for e in ledger_window_check.get("errors", [])
-            if "dayahead" in str(e.get("ledger", "")).lower()
-        ]
-        if dayahead_window_errors:
-            missing_count = len(dayahead_window_errors)
-            msg = (
-                f"dayahead ledger window incomplete for {target_date}: "
-                f"{missing_count} issue(s); refusing to learn dayahead weights"
-            )
-            if not allow_missing:
-                manifest["status"] = "failed"
-                manifest["errors"].append(msg)
-                for err in dayahead_window_errors[:20]:
-                    manifest["errors"].append(_format_ledger_window_error(err))
-                manifest["completed_at"] = datetime.now(timezone.utc).isoformat()
-                _write_weight_manifest(runs_root, target_date, manifest)
-                logger.error(msg)
-                return manifest
-
-            manifest["warnings"].append(
-                msg + "; continuing only because --allow-missing-models was set"
-            )
-            for err in dayahead_window_errors[:20]:
-                manifest["warnings"].append(_format_ledger_window_error(err))
-
-        # Record dayahead selection (always fixed contiguous)
-        manifest["training_day_selection"]["dayahead"] = {
-            "status": "PASS",
-            "method": "fixed_contiguous",
-            "selected_days": dayahead_days_list,
-            "selected_count": len(dayahead_days_list),
-        }
+        try:
+            ledger_window_check = validate_ledger_window(target_date, ledger_root, days=window_days)
+            manifest["ledger_window_check"] = ledger_window_check
+        except Exception as exc:
+            manifest["warnings"].append(f"strict ledger window audit failed: {exc}")
 
         # ------------------------------------------------------------------
-        # Realtime: adaptive complete-day selection
+        # Adaptive complete-day selection for BOTH dayahead and realtime
         # ------------------------------------------------------------------
+        da_selection = select_complete_training_days(
+            task="dayahead",
+            target_date=target_date,
+            ledger_root=ledger_root,
+            expected_models=DAYAHEAD_MODELS,
+            required_days=window_days,
+            max_lookback_days=max_lookback,
+        )
+
         rt_selection = select_complete_training_days(
             task="realtime",
             target_date=target_date,
@@ -391,20 +361,28 @@ def run_ledger_weight(args: Any) -> dict:
             required_days=window_days,
             max_lookback_days=max_lookback,
         )
+
+        manifest["training_day_selection"]["dayahead"] = da_selection
         manifest["training_day_selection"]["realtime"] = rt_selection
 
-        if rt_selection["status"] != "PASS":
-            msg = rt_selection["errors"][0] if rt_selection["errors"] else "realtime training day selection failed"
-            if not allow_missing:
+        # Both must PASS
+        for task, selection in [("dayahead", da_selection), ("realtime", rt_selection)]:
+            if selection["status"] != "PASS":
+                msg = selection["errors"][0] if selection.get("errors") else f"{task}: training day selection failed"
                 manifest["status"] = "failed"
                 manifest["errors"].append(msg)
                 manifest["completed_at"] = datetime.now(timezone.utc).isoformat()
                 _write_weight_manifest(runs_root, target_date, manifest)
-                logger.error(f"[ledger_weight][realtime] {msg}")
+                logger.error(f"[ledger_weight][{task}] {msg}")
                 return manifest
-            manifest["warnings"].append(msg + "; continuing because --allow-missing-models was set")
 
+        dayahead_days_list = da_selection["selected_days"]
         rt_days_list = rt_selection["selected_days"]
+
+        # Update manifest window info from adaptive selection
+        if dayahead_days_list:
+            manifest["window_start"] = dayahead_days_list[-1]
+            manifest["window_end"] = dayahead_days_list[0]
 
         # ------------------------------------------------------------------
         # Learn weights
@@ -427,27 +405,19 @@ def run_ledger_weight(args: Any) -> dict:
             failed_tasks.append(f"dayahead: {da_result.get('error', da_result.get('status'))}")
 
         # Realtime
-        if rt_selection["status"] == "PASS" and rt_days_list:
-            rt_result = _learn_weights_for_task(
-                task="realtime",
-                target_date=target_date,
-                window_days_list=rt_days_list,
-                ledger_root=ledger_root,
-                runs_root=runs_root,
-                expected_models=REALTIME_MODELS,
-                recent_week_boost=recent_week_boost,
-                recent_week_max_gate=recent_week_max_gate,
-            )
-            manifest["results"]["realtime"] = rt_result
-            if rt_result.get("status") != "complete":
-                failed_tasks.append(f"realtime: {rt_result.get('error', rt_result.get('status'))}")
-        else:
-            manifest["results"]["realtime"] = {
-                "task": "realtime",
-                "status": "failed",
-                "error": "realtime training day selection did not pass",
-            }
-            failed_tasks.append("realtime: training day selection failed")
+        rt_result = _learn_weights_for_task(
+            task="realtime",
+            target_date=target_date,
+            window_days_list=rt_days_list,
+            ledger_root=ledger_root,
+            runs_root=runs_root,
+            expected_models=REALTIME_MODELS,
+            recent_week_boost=recent_week_boost,
+            recent_week_max_gate=recent_week_max_gate,
+        )
+        manifest["results"]["realtime"] = rt_result
+        if rt_result.get("status") != "complete":
+            failed_tasks.append(f"realtime: {rt_result.get('error', rt_result.get('status'))}")
 
         if failed_tasks:
             manifest["status"] = "failed"

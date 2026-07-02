@@ -35,6 +35,12 @@ ledger_predict → ledger_weight → ledger_fuse → ledger_classifier → final
 
 最终交付文件：
 
+- **`ledger_predict`**：7 个模型并行/串行预测，写入 prediction ledger
+- **`ledger_weight`**：Dayahead 和 Realtime 均使用 adaptive complete training days：从 D-1 开始向前扫描，跳过不完整日，凑够最近 30 个完整训练日，学习 BGEW 动态融合权重
+- **`ledger_fuse`**：按 (task, period, model) 权重逐小时加权融合
+- **`ledger_classifier`**：仅修正 realtime 极端低价（mid-low 阈值）
+- **`final_outputs`**：合并 dayahead + realtime，生成 24 行 `submission_ready.csv`
+
 ```text
 outputs/runs/YYYY-MM-DD/final/submission_ready.csv
 ```
@@ -411,7 +417,28 @@ python main.py --pipeline ledger_backfill \
   --force
 ```
 
-注意：若 `2026-07-02 realtime actual` 只有部分小时，Realtime adaptive 会跳过这一天；Dayahead 仍需要 Dayahead prediction + actual 完整。
+注意：若 `2026-07-02 realtime actual` 只有部分小时，adaptive 会跳过这一天（dayahead 和 realtime 均如此）。
+
+### 2. Adaptive Complete Training Days
+
+Dayahead 和 Realtime 均使用 adaptive complete training days：
+
+- 从 D-1 开始向前扫描；
+- 跳过不完整日（prediction 缺失、actual 缺失、小时集合 != {1..24}、y_pred/y_true 有 NaN）；
+- 凑够最近 30 个完整训练日；
+- 对 2026-07-03 正式陪跑，如果 2026-07-02 不完整，两个 task 都会从 2026-07-01 开始往前选。
+
+保留说明：
+
+- 如果 90 天内凑不够，使用 `--weight-max-lookback-days 180`。
+- 如果仍凑不够，ledger_weight 失败，错误会写 selected_count / skipped_days / errors。
+- `validate_ledger_window()` 仍作为 audit-only 检查保留，不再作为 hard gate。
+
+权重学习期望行数：
+
+- Dayahead prediction：30 × 3 × 24 = **2160 行**
+- Realtime prediction：30 × 4 × 24 = **2880 行**
+- Actual ledger 每个 task：30 × 24 = **720 行**
 
 ---
 
@@ -453,8 +480,8 @@ NORMAL > DEGRADED_DELIVERED > FAILED_NO_DELIVERY
 |---|---|---|
 | LightGBM `NoneType` | 旧版本未兼容目标日 NaN | 拉取最新 main |
 | SGDFNet 24 行 NaN | 旧版本 `da_anchor` 为 NaN | 拉取最新 main |
-| `ledger_weight` Dayahead FAIL | D-30..D-1 连续 Dayahead ledger 不足 | 补 ledger / backfill |
-| `ledger_weight` Realtime D-1 缺 actual | 正常陪跑场景 | 使用 adaptive，必要时提高 `--weight-max-lookback-days` |
+| `ledger_weight` Dayahead FAIL | adaptive 凑不够 30 天 | 补 ledger / backfill / 提高 `--weight-max-lookback-days` |
+| `ledger_weight` Realtime D-1 缺 actual | 正常陪跑场景 | adaptive 自动跳过，必要时提高 `--weight-max-lookback-days` |
 | `UnicodeDecodeError: gbk` | Windows 默认编码读 JSON | 拉取最新 main，JSON 读写已显式 UTF-8 |
 | `submission_ready.csv` 有 NaN | fuse/final 缺某个 task | 查 `delivery_report.md` 与 stage manifest |
 | exit code 2 | fallback 交付 | 查看 `fallback_report.md/json`，修复后 `--force` 重跑 |
@@ -463,6 +490,14 @@ NORMAL > DEGRADED_DELIVERED > FAILED_NO_DELIVERY
 ---
 
 ## 13. 交付前 Checklist
+
+**原因：**
+- `ledger_weight` 使用 adaptive complete-day selection：从 D-1 开始向前扫描，跳过不完整日，凑够最近 30 个完整训练日。
+- Dayahead 需要 30 × 3 × 24 = **2160 行** prediction rows。
+- Realtime 需要 30 × 4 × 24 = **2880 行** prediction rows。
+- actual 每个 task 需要 30 × 24 = **720 行**。
+- 权重学习**不**读 `outputs/runs`，而是读 `outputs/ledger`。
+- 如果 90 天内凑不够 30 天，使用 `--weight-max-lookback-days 180`。
 
 ```bash
 git pull
