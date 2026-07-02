@@ -360,6 +360,7 @@ def build_ledger_training_table(
     D = pd.Timestamp(target_day)
 
     # Use explicit list if provided, otherwise generate contiguous window
+    window_days_list_explicit = window_days_list is not None
     if window_days_list is None:
         window_days_list = []
         for i in range(1, window_days + 1):
@@ -393,8 +394,12 @@ def build_ledger_training_table(
     # Merge
     training = pred.merge(act_sub, on=merge_keys, how="inner", suffixes=("", "_actual"))
 
-    # Compute age_days: D-1 → 1, D-30 → 30
-    if "target_day" in training.columns:
+    # Compute age_days
+    if window_days_list_explicit and "target_day" in training.columns:
+        # Position-based: selected_days[0] → age_days=1, [1] → 2, ...
+        _age_map = {d: i + 1 for i, d in enumerate(window_days_list)}
+        training["age_days"] = training["target_day"].map(_age_map).fillna(0).astype(int)
+    elif "target_day" in training.columns:
         training["_target_dt"] = pd.to_datetime(training["target_day"])
         training["age_days"] = (D - training["_target_dt"]).dt.days
         training = training.drop(columns=["_target_dt"])

@@ -41,6 +41,7 @@ logger = logging.getLogger(__name__)
 
 DAYAHEAD_MODELS = ["lightgbm", "timesfm", "timemixer"]
 REALTIME_MODELS = ["timesfm", "sgdfnet", "timemixer", "rt916"]
+_EXPECTED_HOURS = set(range(1, 25))  # business hours 1..24
 
 
 # ===========================================================================
@@ -161,8 +162,20 @@ def select_complete_training_days(
             # Dedup by hour_business
             if "hour_business" in model_pred.columns:
                 model_pred = model_pred.drop_duplicates(subset=["hour_business"], keep="last")
-            if len(model_pred) < 24:
-                models_present.append(model)  # present but incomplete
+            # Strict hour set check: must be exactly {1..24}
+            if "hour_business" in model_pred.columns:
+                actual_hours = set(model_pred["hour_business"].astype(int).tolist())
+            else:
+                actual_hours = set()
+            missing_h = _EXPECTED_HOURS - actual_hours
+            extra_h = actual_hours - _EXPECTED_HOURS
+            if missing_h or extra_h:
+                parts_h = []
+                if missing_h:
+                    parts_h.append(f"missing_hours={sorted(missing_h)}")
+                if extra_h:
+                    parts_h.append(f"extra_hours={sorted(extra_h)}")
+                models_missing.append(f"{model} ({'; '.join(parts_h)})")
                 all_models_ok = False
                 continue
             # Check NaN in y_pred
@@ -204,10 +217,22 @@ def select_complete_training_days(
         else:
             day_act_dedup = day_act
 
-        n_act = len(day_act_dedup)
-        if n_act < 24:
-            skipped.append({"day": day, "reason": "actual incomplete", "detail": f"{n_act}/24 hours"})
-            logger.info(f"[ledger_weight][{task}] skip {day}: actual incomplete {n_act}/24 hours")
+        # Strict hour set check: must be exactly {1..24}
+        if "hour_business" in day_act_dedup.columns:
+            actual_act_hours = set(day_act_dedup["hour_business"].astype(int).tolist())
+        else:
+            actual_act_hours = set()
+        act_missing_h = _EXPECTED_HOURS - actual_act_hours
+        act_extra_h = actual_act_hours - _EXPECTED_HOURS
+        if act_missing_h or act_extra_h:
+            parts_h = []
+            if act_missing_h:
+                parts_h.append(f"missing_hours={sorted(act_missing_h)}")
+            if act_extra_h:
+                parts_h.append(f"extra_hours={sorted(act_extra_h)}")
+            n_act = len(day_act_dedup)
+            skipped.append({"day": day, "reason": "actual incomplete", "detail": f"{n_act}/24 hours; {'; '.join(parts_h)}"})
+            logger.info(f"[ledger_weight][{task}] skip {day}: actual hour set mismatch {'; '.join(parts_h)}")
             continue
 
         # Check NaN in y_true
