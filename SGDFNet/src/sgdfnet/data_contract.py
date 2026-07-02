@@ -134,6 +134,60 @@ def _safe_hourly_history(values: pd.Series, lag_hours: int = 24) -> pd.Series:
     return pd.to_numeric(values, errors="coerce").shift(lag_hours)
 
 
+def _fill_da_anchor_fallback(df: pd.DataFrame, time_col: str = "timestamp") -> pd.DataFrame:
+    """
+    Fill NaN da_anchor values with historical same-hour median.
+
+    Fallback priority:
+    1. Same hour-of-day median from all historical non-NaN da_anchor rows
+    2. Global median of da_anchor as last resort
+
+    Only fills rows where da_anchor is NaN. Adds 'da_anchor_fallback_used' column.
+    """
+    df = df.copy()
+    da = df["da_anchor"]
+    missing_mask = da.isna()
+
+    if not missing_mask.any():
+        df["da_anchor_fallback_used"] = False
+        return df
+
+    n_missing = missing_mask.sum()
+    import logging
+    logging.getLogger(__name__).warning(
+        "SGDFNet da_anchor has %d NaN rows — applying same-hour median fallback", n_missing
+    )
+
+    df["da_anchor_fallback_used"] = False
+
+    # Build hour → median lookup from historical (non-NaN) data
+    ts = pd.to_datetime(df[time_col], errors="coerce")
+    hour_key = (ts.dt.hour + 1).replace({0: 24})  # business hour 1-24
+    historical = df.loc[~missing_mask].copy()
+    historical["_hour_key"] = hour_key[~missing_mask]
+
+    if not historical.empty:
+        hour_median = historical.groupby("_hour_key")["da_anchor"].median()
+        global_median = historical["da_anchor"].median()
+    else:
+        hour_median = pd.Series(dtype=float)
+        global_median = 0.0
+
+    # Fill NaN rows
+    fill_hours = hour_key[missing_mask]
+    for idx in df.index[missing_mask]:
+        h = fill_hours.get(idx, None)
+        if h is not None and h in hour_median.index:
+            df.at[idx, "da_anchor"] = hour_median[h]
+        elif not np.isnan(global_median):
+            df.at[idx, "da_anchor"] = global_median
+        else:
+            df.at[idx, "da_anchor"] = 0.0  # absolute last resort
+        df.at[idx, "da_anchor_fallback_used"] = True
+
+    return df
+
+
 def preprocess_dataframe(
     df: pd.DataFrame,
     feature_config: FeatureConfig,
@@ -144,6 +198,8 @@ def preprocess_dataframe(
     out = df.copy()
     out["timestamp"] = pd.to_datetime(out[TIMESTAMP_COL])
     out["da_anchor"] = pd.to_numeric(out[DA_COL], errors="coerce")
+    # FIX (2026-07-02): fill NaN da_anchor with historical same-hour median fallback
+    out = _fill_da_anchor_fallback(out, time_col="timestamp")
     out["rt_actual"] = pd.to_numeric(out[RT_COL], errors="coerce")
     out["delta_target"] = out["rt_actual"] - out["da_anchor"]
     out["direction_label"] = (out["delta_target"] > 0).astype(int)

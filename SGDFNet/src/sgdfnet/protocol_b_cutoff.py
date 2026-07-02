@@ -331,7 +331,25 @@ def run_protocol_b_cutoff_experiment(config_path: str | Path) -> Path:
         if target_rows.empty:
             continue
         target_rows["delta_hat"] = model.predict(target_rows, inference_feature_cols)
+
+        # FIX (2026-07-02): guard against NaN da_anchor after fallback
+        if target_rows["da_anchor"].isna().any():
+            n_nan = target_rows["da_anchor"].isna().sum()
+            raise RuntimeError(
+                f"SGDFNet da_anchor still has {n_nan} NaN values for target_day={target_day} "
+                "after fallback — cannot compute rt_hat safely."
+            )
+
         target_rows["rt_hat"] = target_rows["da_anchor"] + target_rows["delta_hat"]
+
+        # FIX (2026-07-02): guard against NaN rt_hat
+        if target_rows["rt_hat"].isna().any():
+            n_nan = target_rows["rt_hat"].isna().sum()
+            raise RuntimeError(
+                f"SGDFNet rt_hat has {n_nan} NaN values for target_day={target_day} "
+                "after da_anchor fallback — check delta_hat or da_anchor."
+            )
+
         target_rows = _apply_calibration_map(target_rows, calibration_map, config.calibration_mode)
         target_rows["decision_day"] = decision_day.normalize()
         target_rows["target_day"] = target_day.normalize()

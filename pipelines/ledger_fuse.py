@@ -82,13 +82,13 @@ def run_ledger_fuse(args: Any) -> dict:
     manifest_path = runs_root / target_date / "run_manifest.json"
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     if manifest_path.exists():
-        with open(manifest_path, "r") as f:
+        with open(manifest_path, "r", encoding="utf-8") as f:
             existing = json.load(f)
         existing["fuse_stage"] = manifest
-        with open(manifest_path, "w") as f:
+        with open(manifest_path, "w", encoding="utf-8") as f:
             json.dump(existing, f, indent=2, ensure_ascii=False, default=str)
     else:
-        with open(manifest_path, "w") as f:
+        with open(manifest_path, "w", encoding="utf-8") as f:
             json.dump(manifest, f, indent=2, ensure_ascii=False, default=str)
 
     return manifest

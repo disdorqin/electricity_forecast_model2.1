@@ -298,7 +298,10 @@ class LGBMPowerPredictor:
         df['interconnect'] = pd.to_numeric(df[inter_col], errors='coerce').ffill() if inter_col else 0
         
         # 排序并清理
-        df = df.dropna(subset=['ds', 'y']).sort_values('ds').reset_index(drop=True)
+        # FIX (2026-07-02): only drop rows where timestamp is missing.
+        # Target-day rows with NaN y must be preserved for inference (predict_range).
+        # Training functions filter by history date range where y is always valid.
+        df = df.dropna(subset=['ds']).sort_values('ds').reset_index(drop=True)
         return df
        
     def feature_engineering(self, df):

@@ -127,6 +127,19 @@ class LightGBMV1Adapter:
                 use_predicted_temp=False,
             )
 
+        # Guard: explicit check for None / empty return from LightGBM pipeline
+        if df is None:
+            raise RuntimeError(
+                f"LightGBM returned None for task={target}, target_date={target_date}. "
+                "Likely cause: target-day rows are missing after preprocessing, "
+                "or input data does not cover the forecast horizon."
+            )
+        if hasattr(df, "empty") and df.empty:
+            raise RuntimeError(
+                f"LightGBM returned empty DataFrame for task={target}, target_date={target_date}. "
+                "Check that the data file covers the required date range."
+            )
+
         # Standardize output
         task_label = "dayahead" if target == "dayahead" else "realtime"
         df = standardize_business_columns(
